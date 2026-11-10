@@ -509,7 +509,10 @@ enum Diagnostics {
                                         name: name,
                                         group: group,
                                         emit: emit)
-            guard result.access else { continue }
+            // A token can be issued for a non-existent known name; only keep
+            // entries that actually produced container metadata or a file.
+            guard result.access,
+                  result.idRead || result.metadataRead || result.readBytes > 0 else { continue }
             results.append(result)
             if result.readBytes > 0 || result.metadataRead { reads += 1 }
         }
