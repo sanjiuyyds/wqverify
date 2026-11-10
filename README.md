@@ -167,12 +167,23 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 下面依次是：
 
-- 四个数字：`父路径`（拿到 extension 的目标数）、`目录可读`、`跨容器读取`、`inode 扫描`（27.0.1 上父路径 -6 时通过 fsgetpath 找到的子容器数）。
+- 四个数字：`父路径`（拿到 extension 的目标数）、`目录可读`、`跨容器读取`（文件内容、metadata plist、container id xattr 都算）、`扫描容器`（27.0.1 上父路径 -6 时通过 fsgetpath 或已知名字找到的子容器数）。
 - 阶段检查：App Group → 私有符号 → 路径逃逸 → 跨容器读取，每行带绿/红/橙图标。
 - 每个目标路径一张卡：右侧 `PASS / WARN / FAIL / SKIP`，下面写 `handle` 和「消费前 EPERM / 消费后可读 N 项」。
 - 子容器读取成功会绿色显示 `read=...B`。
 - 底部折叠 `原始日志`；工具栏可分享完整报告。
 - 报告同时写到 `Documents/wq_report.txt`，可用 `pymobiledevice3 apps pull` 取回。
+
+### 6.1 这不是漏洞的上限
+
+当前面板的覆盖范围是**诊断器的限制**，不是 worse_query 的上限：
+
+- 每个父路径最多取 8 个子容器，fsgetpath 扫描预算 30 秒。
+- SystemGroup 不依赖扫描，直接试一组已知容器名（`systemgroup.com.apple.*`）。
+- 每个容器会试 `Library/Preferences`、`Documents`、`Library/Caches`、`tmp`，读到第一个文件就停。
+- `container id` xattr 和 metadata plist 读取都算跨容器访问，所以 daemon / plugin 容器即使 Preferences 为空也会显示 `id ok`。
+
+继续扩的话：全量多线程 inode 扫描、按 LaunchServices 数据库取全部 App、读更多文件类型。这些是工程量，不是漏洞边界。
 
 ---
 
