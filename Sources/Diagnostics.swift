@@ -631,7 +631,7 @@ extension Diagnostics.Report {
             let post = t.postListable ? "\(t.entryCount)项" : "拒绝(\(t.postErrno))"
             s += "[\(t.statusWord)] \(t.label)\n"
             s += "  \(t.path)\n"
-            s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 子读取=\(t.childReads)\n"
+            s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 文件=\(t.fileReads) 仅id=\(t.idOnlyReads)\n"
             if t.scanChildren > 0 {
                 s += "  扫描=\(t.scanChildren) 个子容器 文件=\(t.fileReads) 仅id=\(t.idOnlyReads)\n"
             }
