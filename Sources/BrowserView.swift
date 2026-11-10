@@ -489,7 +489,7 @@ struct FileViewerView: View {
         let bytes = [UInt8](data.prefix(limit))
         if bytes.isEmpty { return "(空文件)" }
 
-        let printable = Array(#" !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~"#)
+        let printable = Array(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
 
         var lines: [String] = []
         var offset = 0
