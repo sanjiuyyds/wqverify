@@ -1,0 +1,175 @@
+name: build-ipa
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUNDLE_ID: ${{ vars.BUNDLE_ID || 'com.example.wqdiag' }}
+  APP_GROUP: ${{ vars.APP_GROUP || 'group.com.example.wqdiag' }}
+  # enterprise = In-House distribution (no UDID list). Use "development" if the
+  # profile is a development profile tied to registered device UDIDs.
+  SIGNING_METHOD: ${{ vars.SIGNING_METHOD || 'enterprise' }}
+  # Enterprise / distribution certs are normally "Apple Distribution".
+  # Older accounts may show "iPhone Distribution"; override via repo variable.
+  CERT_IDENTITY: ${{ vars.CERT_IDENTITY || 'Apple Distribution' }}
+
+jobs:
+  # Secrets cannot be referenced in `if:` expressions, so probe them once.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.check.outputs.signed }}
+    steps:
+      - id: check
+        env:
+          CERT: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          PROFILE: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$PROFILE" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets present -> signed IPA will be built."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "No signing secrets -> unsigned IPA only."
+          fi
+
+  build:
+    runs-on: macos-15
+    needs: preflight
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Always produced. Proves the Objective-C/Swift compiles, but an unsigned
+      # IPA cannot be installed on a stock device.
+      - name: Build unsigned IPA
+        run: |
+          set -euo pipefail
+          xcodebuild -project WQDiag.xcodeproj -scheme WQDiag -configuration Release \
+            -sdk iphoneos -derivedDataPath build \
+            BUNDLE_ID="$BUNDLE_ID" APP_GROUP="$APP_GROUP" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+          rm -rf Payload
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/WQDiag.app Payload/
+          echo "Bundle ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Payload/WQDiag.app/Info.plist)"
+          echo "App Group: $(/usr/libexec/PlistBuddy -c 'Print :WQAppGroup' Payload/WQDiag.app/Info.plist)"
+          zip -qry WQDiag-unsigned.ipa Payload
+
+      - name: Import signing certificate
+        if: needs.preflight.outputs.signed == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile
+        if: needs.preflight.outputs.signed == 'true'
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PP="$RUNNER_TEMP/profile.mobileprovision"
+          printf '%s' "$PROVISIONING_PROFILE_BASE64" | base64 -D > "$PP"
+          cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/"
+          security cms -D -i "$PP" > "$RUNNER_TEMP/profile.plist"
+
+          echo "Profile name: $(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")"
+          echo "Profile type: $(/usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' "$RUNNER_TEMP/profile.plist" 2>/dev/null || echo false)"
+          echo "Profile App Groups:"
+          /usr/libexec/PlistBuddy -c \
+            'Print :Entitlements:com.apple.security.application-groups' \
+            "$RUNNER_TEMP/profile.plist" \
+            || echo "  (none - signing will fail or the entitlement will be stripped)"
+
+      - name: Archive (signed)
+        if: needs.preflight.outputs.signed == 'true'
+        env:
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          PROFILE_NAME: ${{ secrets.PROFILE_NAME }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project WQDiag.xcodeproj -scheme WQDiag -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/WQDiag.xcarchive" \
+            BUNDLE_ID="$BUNDLE_ID" APP_GROUP="$APP_GROUP" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$CERT_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/app-signing.keychain-db"
+
+      - name: Export signed IPA
+        if: needs.preflight.outputs.signed == 'true'
+        env:
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          PROFILE_NAME: ${{ secrets.PROFILE_NAME }}
+        run: |
+          set -euo pipefail
+          sed -e "s|__METHOD__|$SIGNING_METHOD|g" \
+              -e "s|__TEAM_ID__|$TEAM_ID|g" \
+              -e "s|__BUNDLE_ID__|$BUNDLE_ID|g" \
+              -e "s|__PROFILE_NAME__|$PROFILE_NAME|g" \
+              Signing/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/WQDiag.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+          cp "$RUNNER_TEMP"/export/*.ipa WQDiag-signed.ipa
+          ls -lh WQDiag-signed.ipa
+
+      - name: Verify signed IPA entitlements
+        if: needs.preflight.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/ipa-check" && mkdir -p "$RUNNER_TEMP/ipa-check"
+          unzip -q WQDiag-signed.ipa -d "$RUNNER_TEMP/ipa-check"
+          APP="$RUNNER_TEMP/ipa-check/Payload/WQDiag.app"
+          codesign -dv --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/entitlements.txt"
+          grep -q "application-groups" "$RUNNER_TEMP/entitlements.txt" \
+            || { echo "ERROR: signed app has no App Groups entitlement"; exit 1; }
+          grep -q "$APP_GROUP" "$RUNNER_TEMP/entitlements.txt" \
+            || { echo "ERROR: signed app App Group does not match $APP_GROUP"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WQDiag-unsigned
+          path: WQDiag-unsigned.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: needs.preflight.outputs.signed == 'true'
+        with:
+          name: WQDiag-signed
+          path: WQDiag-signed.ipa
+          if-no-files-found: error
