@@ -617,7 +617,7 @@ struct FileViewerView: View {
             return
         }
 
-        let parent = (path as NSString).deletingLastPathComponent()
+        let parent = (path as NSString).deletingLastPathComponent
 
         var h = worse_query(path, group, false, true)
         if h < 0 {
