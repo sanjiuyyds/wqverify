@@ -42,13 +42,7 @@
             ReferencedContainer = "container:wqverify.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-         <CommandLineArgument
-            argument = "--hello"
-            isEnabled = "YES">
-         </CommandLineArgument>
-      </CommandLineArguments>
-   </LaunchAction>
+         </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
       shouldUseLaunchSchemeArgsEnv = "YES"

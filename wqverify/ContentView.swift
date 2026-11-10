@@ -1,6 +1,19 @@
 import SwiftUI
+import Foundation
 
 struct ContentView: View {
+    var body: some View {
+        if ProcessInfo.processInfo.arguments.contains("--hello") {
+            HelloView()
+        } else {
+            DashboardView()
+        }
+    }
+}
+
+/// Kept from the original minimal harness: `dvt launch "<BUNDLE_ID> --hello"`
+/// still dumps argv / home and writes result.txt to Documents.
+struct HelloView: View {
     @State private var text = "running..."
 
     var body: some View {
@@ -12,36 +25,19 @@ struct ContentView: View {
         }
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
-
-            // ★ 启动参数分发入口
-            // 用法：dvt launch "<BUNDLE_ID> --hello"
-            if args.contains("--hello") {
-                let out = """
-                Hello from launch argument
-
-                argv = \(args)
-                home = \(NSHomeDirectory())
-                uid  = \(getuid())
-                pid  = \(getpid())
-                """
-                text = out
-                writeResult("result.txt", out)
-                return
-            }
-
-            // 默认行为
             let out = """
-            默认路径（无启动参数）
+            Hello from launch argument
 
             argv = \(args)
             home = \(NSHomeDirectory())
+            uid  = \(getuid())
+            pid  = \(getpid())
             """
             text = out
             writeResult("result.txt", out)
         }
     }
 
-    /// 写到 Documents/，可用 `pymobiledevice3 apps pull` 取回
     private func writeResult(_ name: String, _ content: String) {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let url = dir.appendingPathComponent(name)

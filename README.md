@@ -136,14 +136,27 @@ open WQDiag.xcodeproj
 选中你的 iPhone 17 Pro Max，Signing 里确认 Team 和 App Groups，直接 Run。
 本地跑比 Actions 少一层证书搬运，调试最快。
 
+### 4.3 直接跑你现在这个 `wqverify` 工程
+
+`wqverify.xcodeproj` 已经接入了同一套诊断，不再只是打印 argv/home：
+
+- 编译 `Sources/worse_query.m`、`Sources/wq_diag.m`、`Sources/Diagnostics.swift`、`Sources/DashboardView.swift`；
+- `INFOPLIST_FILE = Sources/Info.plist`
+- `SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h`
+- `CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements`
+- `APP_GROUP = group.com.example.wqverify`（改成你自己的 group）
+
+默认启动直接进诊断面板；`dvt launch "<BUNDLE_ID> --hello"` 仍然走原来的 argv/home 分支。
+`build.yml` 产出的是 unsigned IPA，必须用**包含该 App Group** 的企业 profile 重签后才可能通过 Stage 1。
+
 ---
 
 ## 5. 安装与运行
 
-- **Windows**：3uTools / iMazing 直接安装 `WQDiag-signed.ipa`，**不要重新签名**（重签会把 App Group 丢掉）。
+- **Windows**：3uTools / iMazing 直接安装签名后的 IPA（`WQDiag-signed.ipa` 或你签好的 `wqverify` IPA），**不要重新签名**（重签会把 App Group 丢掉）。
 - **macOS**：Apple Configurator 2 → Add → Apps → 选 IPA；或 Xcode → Window → Devices and Simulators → `+`。
 - 首次启动前：`设置 → 通用 → VPN 与设备管理 → 信任企业开发者`。
-- 打开 App 会自动跑，也可以点 `Run verification`；跑完点 `Share report` 导出文本。
+- 打开 App 会自动跑；顶部大卡片直接给结论，工具栏分享按钮导出完整报告，或点「复制结论」。右上角刷新按钮可重跑。
 
 ---
 
@@ -171,6 +184,15 @@ handles > 0 && (listings > 0 || child reads > 0)  -> PASS
 handles > 0 但读不到任何东西                       -> PARTIAL
 handles == 0                                      -> FAIL
 ```
+
+界面按这个判定直接上色：
+
+- 顶部大卡片：绿色 `沙盒逃逸生效` / 橙色 `逃逸部分生效` / 红色 `未生效` / 灰色 `无法验证`。
+- 三个数字：拿到几个 extension、几个目录可读、几个跨容器文件可读。
+- 阶段检查：4 行，每行带绿/红/橙状态图标。
+- 目标路径：每个路径一张卡，右侧 `PASS / WARN / FAIL / SKIP`，下面直接显示 `handle` 和“消费前 EPERM / 消费后可读 N 项”。
+- 子容器读取成功会以绿色单独列一行 `read=...B`。
+- 底部折叠 `原始日志`，工具栏可直接分享完整报告。
 
 返回码对照：
 
@@ -200,12 +222,19 @@ handles == 0                                      -> FAIL
 
 ```
 wq-verify/
-├── .github/workflows/ios.yml     # 免费编译 + 企业签名
-├── Config.xcconfig               # 本地构建参数
-├── project.yml                   # XcodeGen 工程描述
+├── .github/workflows/
+│   ├── ios.yml                   # WQDiag：免费编译 + 企业签名
+│   └── build.yml                 # wqverify：unsigned IPA（重签后装）
+├── Config.xcconfig               # WQDiag 本地构建参数
+├── project.yml                   # WQDiag 的 XcodeGen 描述
 ├── Signing/ExportOptions.plist   # 导出模板
+├── wqverify.xcodeproj            # 你现在在跑的 wqverify 工程（已接入诊断）
+├── wqverify/
+│   ├── wqverifyApp.swift
+│   └── ContentView.swift         # 默认进 Dashboard，--hello 走旧分支
 └── Sources/
-    ├── App.swift                 # SwiftUI 壳
+    ├── App.swift                 # WQDiag 入口
+    ├── DashboardView.swift       # 可视化面板（两个 target 共用）
     ├── Diagnostics.swift         # 分阶段验证逻辑
     ├── worse_query.m/h           # 原 PoC，未改
     ├── wq_diag.m/h               # 只读探测辅助

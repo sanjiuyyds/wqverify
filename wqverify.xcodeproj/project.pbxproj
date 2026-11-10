@@ -9,12 +9,24 @@
 /* Begin PBXBuildFile section */
 		A100000001 /* wqverifyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000001; };
 		A100000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000002; };
+		A100000003 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000004; };
+		A100000004 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000005; };
+		A100000005 /* worse_query.m in Sources */ = {isa = PBXBuildFile; fileRef = A200000006; };
+		A100000006 /* wq_diag.m in Sources */ = {isa = PBXBuildFile; fileRef = A200000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A200000001 /* wqverifyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wqverifyApp.swift; sourceTree = "<group>"; };
 		A200000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A200000003 /* wqverify.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wqverify.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A200000004 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
+		A200000005 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A200000006 /* worse_query.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = worse_query.m; sourceTree = "<group>"; };
+		A200000007 /* worse_query.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = worse_query.h; sourceTree = "<group>"; };
+		A200000008 /* wq_diag.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = wq_diag.m; sourceTree = "<group>"; };
+		A200000009 /* wq_diag.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wq_diag.h; sourceTree = "<group>"; };
+		A20000000A /* WQDiag-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQDiag-Bridging-Header.h; sourceTree = "<group>"; };
+		A20000000B /* WQDiag.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WQDiag.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +44,7 @@
 			isa = PBXGroup;
 			children = (
 				A400000002 /* wqverify */,
+				A400000004 /* Sources */,
 				A400000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +56,21 @@
 				A200000002 /* ContentView.swift */,
 			);
 			path = wqverify;
+			sourceTree = "<group>";
+		};
+		A400000004 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A200000004 /* Diagnostics.swift */,
+				A200000005 /* DashboardView.swift */,
+				A200000006 /* worse_query.m */,
+				A200000007 /* worse_query.h */,
+				A200000008 /* wq_diag.m */,
+				A200000009 /* wq_diag.h */,
+				A20000000A /* WQDiag-Bridging-Header.h */,
+				A20000000B /* WQDiag.entitlements */,
+			);
+			path = Sources;
 			sourceTree = "<group>";
 		};
 		A400000003 /* Products */ = {
@@ -118,6 +146,10 @@
 			files = (
 				A100000001 /* wqverifyApp.swift in Sources */,
 				A100000002 /* ContentView.swift in Sources */,
+				A100000003 /* Diagnostics.swift in Sources */,
+				A100000004 /* DashboardView.swift in Sources */,
+				A100000005 /* worse_query.m in Sources */,
+				A100000006 /* wq_diag.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -128,9 +160,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				APP_GROUP = "group.com.example.wqverify";
+				CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements;
+				INFOPLIST_FILE = Sources/Info.plist;
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_KEY_CFBundleDisplayName = "wq-verify";
 				INFOPLIST_KEY_UIFileSharingEnabled = YES;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -156,9 +193,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				APP_GROUP = "group.com.example.wqverify";
+				CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements;
+				INFOPLIST_FILE = Sources/Info.plist;
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_KEY_CFBundleDisplayName = "wq-verify";
 				INFOPLIST_KEY_UIFileSharingEnabled = YES;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;

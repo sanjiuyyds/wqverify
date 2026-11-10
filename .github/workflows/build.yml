@@ -3,6 +3,10 @@ name: build-ipa
 on:
   workflow_dispatch:
 
+env:
+  BUNDLE_ID: ${{ vars.BUNDLE_ID || 'com.example.wqverify' }}
+  APP_GROUP: ${{ vars.APP_GROUP || 'group.com.example.wqverify' }}
+
 jobs:
   build:
     runs-on: macos-latest
@@ -33,8 +37,13 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
-            PRODUCT_BUNDLE_IDENTIFIER="com.example.wqverify" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            APP_GROUP="$APP_GROUP" \
             build 2>&1 | tee build.log
+
+      # 这个 IPA 是 unsigned 的。要跑 PoC，必须用你的企业证书/profile 重签，
+      # 且 profile 的 Entitlements 必须包含 com.apple.security.application-groups，
+      # 值与上面的 APP_GROUP 一致，否则 App 会在 Stage 1 直接判 untestable。
 
       - name: Show errors if failed
         if: failure()
@@ -61,6 +70,8 @@ jobs:
           echo "=== Info.plist 文件共享设置 ==="
           /usr/libexec/PlistBuddy -c "Print :UIFileSharingEnabled" "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :LSSupportsOpeningDocumentsInPlace" "$PLIST"
+          echo "=== App Group ==="
+          /usr/libexec/PlistBuddy -c "Print :WQAppGroup" "$PLIST"
 
       - name: Package into .ipa
         run: |
@@ -90,7 +101,9 @@ jobs:
           ls -l "$BIN"
           echo "=== SHA256 ==="
           shasum -a 256 "$BIN"
-          echo "=== 自定义符号 ==="
+          echo "=== PoC 符号 ==="
+          nm -a "$BIN" 2>/dev/null | grep -iE "worse_query|wq_diag|container_query" || echo "(未找到 PoC 符号)"
+          echo "=== 旧 harness 符号 ==="
           nm -a "$BIN" 2>/dev/null | grep -i "writeResult" || echo "(未找到 writeResult)"
 
       - name: Upload ipa
