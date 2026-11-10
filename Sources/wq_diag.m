@@ -5,11 +5,19 @@
 
 #import "wq_diag.h"
 
+#include <CoreFoundation/CoreFoundation.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/fsgetpath.h>
+#include <sys/mount.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/syslimits.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -47,6 +55,108 @@ NSString *wq_own_app_group(void) {
         if (root) return candidate;
     }
     return nil;
+}
+
+uint64_t wq_baseline_inode(void) {
+    NSString *name = [NSString stringWithFormat:@"wq-baseline-%@", NSUUID.UUID.UUIDString];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+    uint64_t inode = 0;
+
+    if ([@"x" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+        struct stat st;
+        if (stat(path.fileSystemRepresentation, &st) == 0) inode = (uint64_t)st.st_ino;
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+    return inode;
+}
+
+NSDictionary<NSString *, NSArray<NSString *> *> *wq_scan_children(NSArray<NSString *> *parents,
+                                                                  uint64_t maxInode,
+                                                                  NSInteger limitPerParent,
+                                                                  double seconds) {
+    NSMutableArray<NSString *> *dirs = [NSMutableArray array];
+    for (NSString *parent in parents) {
+        if (![parent isKindOfClass:[NSString class]] || parent.length == 0) continue;
+        NSString *dir = parent;
+        while (dir.length > 1 && [dir hasSuffix:@"/"]) {
+            dir = [dir substringToIndex:dir.length - 1];
+        }
+        if (![dirs containsObject:dir]) [dirs addObject:dir];
+    }
+    if (dirs.count == 0 || maxInode < 1) return @{};
+
+    struct statfs sfs;
+    if (statfs(dirs.firstObject.fileSystemRepresentation, &sfs) != 0) {
+        if (statfs("/private/var", &sfs) != 0) return @{};
+    }
+    fsid_t fsid = sfs.f_fsid;
+
+    NSUInteger count = dirs.count;
+    char **prefixes = calloc(count, sizeof(char *));
+    size_t *lengths = calloc(count, sizeof(size_t));
+    if (!prefixes || !lengths) {
+        if (prefixes) free(prefixes);
+        if (lengths) free(lengths);
+        return @{};
+    }
+
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *found =
+        [NSMutableDictionary dictionary];
+
+    for (NSUInteger i = 0; i < count; i++) {
+        NSString *dir = dirs[i];
+        found[dir] = [NSMutableArray array];
+
+        char buf[PATH_MAX];
+        if (![dir getFileSystemRepresentation:buf maxLength:sizeof(buf)]) continue;
+        size_t len = strlen(buf);
+        if (len == 1 && buf[0] == '/') len = 0;
+        prefixes[i] = strdup(buf);
+        lengths[i] = len;
+    }
+
+    double deadline = CFAbsoluteTimeGetCurrent() + (seconds > 0 ? seconds : 25.0);
+    char buffer[PATH_MAX];
+
+    for (uint64_t inode = 1; inode <= maxInode; inode++) {
+        if ((inode & 0xFFFF) == 0) {
+            if (CFAbsoluteTimeGetCurrent() > deadline) break;
+
+            BOOL allFull = YES;
+            for (NSUInteger i = 0; i < count; i++) {
+                NSMutableArray<NSString *> *items = found[dirs[i]];
+                if (items.count < (NSUInteger)limitPerParent) {
+                    allFull = NO;
+                    break;
+                }
+            }
+            if (allFull) break;
+        }
+
+        ssize_t n = fsgetpath(buffer, sizeof(buffer), &fsid, inode);
+        if (n <= 0) continue;
+
+        for (NSUInteger i = 0; i < count; i++) {
+            if (!prefixes[i]) continue;
+            size_t len = lengths[i];
+            if (strncmp(buffer, prefixes[i], len) != 0) continue;
+            if (buffer[len] != '/') continue;
+            if (strchr(buffer + len + 1, '/')) continue;
+
+            NSMutableArray<NSString *> *items = found[dirs[i]];
+            if (limitPerParent > 0 && (NSInteger)items.count >= limitPerParent) continue;
+
+            NSString *path = [NSString stringWithUTF8String:buffer];
+            if (path && ![items containsObject:path]) [items addObject:path];
+        }
+    }
+
+    for (NSUInteger i = 0; i < count; i++) {
+        if (prefixes[i]) free(prefixes[i]);
+    }
+    free(prefixes);
+    free(lengths);
+    return (NSDictionary<NSString *, NSArray<NSString *> *> *)found;
 }
 
 NSString *wq_diag_symbol_report(void) {

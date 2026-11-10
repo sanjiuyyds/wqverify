@@ -32,6 +32,11 @@
 /var/mobile/Containers/Shared/AppGroup              (iOS 27)
 ```
 
+iOS 27.0.1 上，四个容器父路径（Application / InternalDaemon / PluginKitPlugin /
+SystemGroup）会拒绝签发 token（返回 `-6`）。验证器会再用 `fsgetpath` 按 inode
+扫出这些父路径的直接子容器，然后逐个消费子容器 extension——这也是 WQFiles 在
+27.0.1 上的做法。AppGroup 根目录和 System 数据父路径仍然可以直接拿 token。
+
 iOS 26 和 27 的 query flags 不同：
 
 | 系统 | flags |
@@ -162,7 +167,7 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 下面依次是：
 
-- 三个数字：`Extension`、`目录可读`、`跨容器读取`。
+- 四个数字：`父路径`（拿到 extension 的目标数）、`目录可读`、`跨容器读取`、`inode 扫描`（27.0.1 上父路径 -6 时通过 fsgetpath 找到的子容器数）。
 - 阶段检查：App Group → 私有符号 → 路径逃逸 → 跨容器读取，每行带绿/红/橙图标。
 - 每个目标路径一张卡：右侧 `PASS / WARN / FAIL / SKIP`，下面写 `handle` 和「消费前 EPERM / 消费后可读 N 项」。
 - 子容器读取成功会绿色显示 `read=...B`。

