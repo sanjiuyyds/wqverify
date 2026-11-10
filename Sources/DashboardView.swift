@@ -60,7 +60,7 @@ struct DashboardView: View {
                         TargetSection(report: report)
                         RawSection(report: report)
 
-                        Text("只读探测，只会写入自己的 App Group。仅用于你拥有的设备。")
+                        Text("只读探测。id ok = 只读到 container id xattr；read=...B 才是真实文件内容。仅用于你拥有的设备。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -164,12 +164,12 @@ struct MetricsGrid: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MetricTile(title: "父路径",
+            MetricTile(title: "可达目标",
+                       value: "\(report.reachableTargets)/\(report.targets.count)",
+                       tint: .green)
+            MetricTile(title: "父级 token",
                        value: "\(report.handles)/\(report.targets.count)",
                        tint: .blue)
-            MetricTile(title: "目录可读",
-                       value: "\(report.listings)",
-                       tint: .teal)
             MetricTile(title: "跨容器读取",
                        value: "\(report.deepReads)",
                        tint: .purple)

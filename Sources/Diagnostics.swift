@@ -405,18 +405,19 @@ enum Diagnostics {
                                 : "没有跨容器文件读取成功"))
 
         // MARK: Verdict
+        let reachable = results.filter { $0.status == .pass }.count
         let verdict: Verdict
         let headline: String
         let subheadline: String
 
-        if handles > 0 && (listings > 0 || deepReads > 0) {
+        if deepReads > 0 || (handles > 0 && listings > 0) {
             verdict = .pass
             headline = "沙盒逃逸生效"
-            subheadline = "拿到 \(handles) 个 extension，\(listings) 个目录可读，\(deepReads) 个跨容器文件可读"
-        } else if handles > 0 {
+            subheadline = "目标 \(reachable)/\(targets.count) 可达，\(deepReads) 个跨容器读取；父级 token \(handles)/\(targets.count)"
+        } else if handles > 0 || scanTotal > 0 {
             verdict = .partial
             headline = "逃逸部分生效"
-            subheadline = "extension 签发成功，但目录/文件读不到"
+            subheadline = "找到了容器，但目录/文件读不到"
         } else {
             verdict = .fail
             headline = "沙盒逃逸未生效"
@@ -602,13 +603,17 @@ extension Diagnostics.Report {
         targets.reduce(0) { $0 + $1.scanChildren }
     }
 
+    var reachableTargets: Int {
+        targets.filter { $0.status == .pass }.count
+    }
+
     var shareText: String {
         var s = "worse_query 验证结论\n"
         s += "\(headline)\n"
         s += "\(subheadline)\n"
         s += "iOS \(iosVersion) | \(device)\n"
         s += "App Group: \(groupIdentifier)\n"
-        s += "extension \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | 扫描子容器 \(scanChildrenTotal)\n\n"
+        s += "目标可达 \(reachableTargets)/\(targets.count) | 父级 token \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | 扫描子容器 \(scanChildrenTotal)\n\n"
 
         for t in targets {
             let pre = t.preListable ? "可读" : "EPERM(\(t.preErrno))"

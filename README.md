@@ -185,6 +185,17 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 继续扩的话：全量多线程 inode 扫描、按 LaunchServices 数据库取全部 App、读更多文件类型。这些是工程量，不是漏洞边界。
 
+### 6.2 `父级 token 2/6` 和 `可达目标 6/6` 不是一回事
+
+- **父级 token**：直接对父目录调用 `worse_query()` 成功的数量。iOS 27.0.1 只给
+  `AppGroup` 根目录和 `System 数据` 签发，所以是 2/6。
+- **可达目标**：包括父级 token，也包括通过 fsgetpath / 已知名字找到子容器后
+  逐个消费 extension 的目标。它才是“能不能访问”的结论。
+- 那四个父路径返回 `-6` 是 iOS 27.0.1 的系统行为，不是失败；它们的子容器仍然
+  可以逐个拿 extension，并读到真实文件（iBooks / Notes / Maps 已实测）。
+- `id ok` 表示只读到 container id xattr，`read=...B` 才是文件内容；两者都是
+  跨容器访问，但证据强度不同。
+
 ---
 
 ## 7. 返回码与判定
