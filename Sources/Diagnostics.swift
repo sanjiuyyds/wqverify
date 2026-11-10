@@ -54,6 +54,14 @@ enum Diagnostics {
             children.filter { $0.idRead && $0.readBytes == 0 && !$0.metadataRead }.count
         }
 
+        /// Hide tokens that produced neither container metadata nor a file.
+        /// Extension failures stay visible; those are real diagnostics.
+        var displayChildren: [ChildResult] {
+            children.filter {
+                !$0.access || $0.idRead || $0.metadataRead || $0.readBytes > 0
+            }
+        }
+
         var status: Status {
             if fileReads > 0 { return .pass }
             if handle >= 0 && postListable { return .warn }

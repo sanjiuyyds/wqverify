@@ -277,8 +277,9 @@ struct TargetCard: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            ForEach(target.children.indices, id: \.self) { j in
-                let child = target.children[j]
+            let visible = target.displayChildren
+            ForEach(visible.indices, id: \.self) { j in
+                let child = visible[j]
 
                 Text(childLine(child))
                     .font(.caption2.monospaced())
