@@ -54,25 +54,6 @@ jobs:
           echo "=== 最后 60 行 ==="
           tail -60 build.log || true
 
-      # ★ Xcode 26 的 GENERATE_INFOPLIST_FILE 没有把
-      #   INFOPLIST_KEY_UIFileSharingEnabled 写进 Info.plist（实测），
-      #   打包前直接补进去，保证 Documents/ 在「文件」App 里可见。
-      - name: Patch Info.plist
-        run: |
-          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
-          if [ -z "$APP" ]; then
-            echo "ERROR: 找不到 .app 产物"
-            exit 1
-          fi
-          PLIST="$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :UIFileSharingEnabled true" "$PLIST" 2>/dev/null ||             /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :LSSupportsOpeningDocumentsInPlace true" "$PLIST" 2>/dev/null ||             /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$PLIST"
-          echo "=== Info.plist 文件共享设置 ==="
-          /usr/libexec/PlistBuddy -c "Print :UIFileSharingEnabled" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :LSSupportsOpeningDocumentsInPlace" "$PLIST"
-          echo "=== App Group ==="
-          /usr/libexec/PlistBuddy -c "Print :WQAppGroup" "$PLIST"
-
       - name: Package into .ipa
         run: |
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
@@ -82,6 +63,9 @@ jobs:
             exit 1
           fi
           echo "app = $APP"
+          echo "Bundle ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          echo "App Group: $(/usr/libexec/PlistBuddy -c 'Print :WQAppGroup' "$APP/Info.plist")"
+          echo "File sharing: $(/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$APP/Info.plist")"
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/

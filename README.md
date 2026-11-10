@@ -1,26 +1,26 @@
-# worse_query 验证工程（WQDiag）
+# worse_query 验证工程（wqverify）
 
-给 **iPhone 17 Pro Max / iOS 27.0.1** 用的最小化实机验证程序。
+在 **iPhone 17 Pro Max / iOS 27.0.1** 上验证 worse_query 沙盒逃逸的最小 App。
 
 原项目：[forcequitOS/worse_query](https://github.com/forcequitOS/worse_query)（GPL-3.0）。
-本目录只增加了一个自动诊断壳，PoC 本体 `Sources/worse_query.m` 保持原样。
+`Sources/worse_query.m` 保持原样，本仓库只加了诊断、可视化和构建脚本。
 
 ---
 
-## 1. 这个 PoC 到底做了什么
+## 1. 这个 PoC 做了什么
 
-它不是内核漏洞，不是越狱，是 **containermanagerd 的路径解析问题 + sandbox extension 滥用**：
+不是内核漏洞，不是越狱，是 **containermanagerd 解析路径时跟随符号链接**：
 
-1. 应用必须拥有一个 **App Group**，因此有 `com.apple.security.application-groups`  entitlement。
-2. 代码把自己的 App Group 容器里的 `Library/Caches` 删除，替换成一个 **符号链接**，指向任意目标路径（例如别的 App 容器）。
+1. App 必须拥有一个 **App Group**，因此有 `com.apple.security.application-groups` entitlement。
+2. 把 App Group 容器里的 `Library/Caches` 删除，替换成指向任意目标路径的符号链接。
 3. 调用私有库 `libsystem_containermanager.dylib` 的 `container_query_*`：
    - `class = 7`（App Group）
    - `part = 3`（Library/Caches）
    - 查询自己有权访问的 App Group。
-4. containermanagerd 按 `Library/Caches` 生成 sandbox extension token 时，**跟随了符号链接**，token 的授权路径变成了符号链接的目标。
-5. 应用 `sandbox_extension_consume(token)`，于是内核把目标路径加入本进程的沙盒白名单。
+4. containermanagerd 生成 sandbox extension token 时跟随了符号链接，token 的授权路径变成目标路径。
+5. `sandbox_extension_consume(token)` 把目标路径加入本进程的沙盒白名单。
 
-结果：应用可以读取原项目列出的这些目录：
+结果：可以读取/枚举原项目列出的容器路径：
 
 ```
 /var/containers/Data/System                         (iOS 27)
@@ -32,7 +32,7 @@
 /var/mobile/Containers/Shared/AppGroup              (iOS 27)
 ```
 
-`iOS 26.x` 和 `iOS 27.x` 的 query flags 不同，所以原代码按 `majorVersion == 26` 分支：
+iOS 26 和 27 的 query flags 不同：
 
 | 系统 | flags |
 |---|---|
@@ -43,65 +43,56 @@
 
 ## 2. iOS 27.0.1 / iPhone 17 Pro Max 适不适用
 
-**结论：高度适用，但必须实机跑一次才算数。**
+**结论：高度适用，但必须实机跑一次。**
 
-依据：
+- 原 README 标注支持 `iOS 26.0 - 26.7.2 / 27.2`，仓库创建于 2026-11-08。
+- 前代 `bad_query` 标注支持到 `27.0b4`，说明 27.0 系列本来就是目标。
+- 27.0.1 夹在 27.0b4 和 27.2 之间；Apple 不会在 27.0.1 修掉又在 27.2 复发。
+- PoC 没有硬件偏移、内核地址或机型判断，A19 Pro 不构成额外变量。
 
-- 原 README 标注支持 `iOS 26.0 - 26.7.2 / 27.2`；仓库创建于 2026-11-08，作者已经在 27.2 上验证过。
-- 前代 `bad_query` 标注支持到 `27.0b4`，说明 27.0 系列本身就是目标。
-- `27.0.1` 位于 `27.0b4` 和 `27.2` 之间。Apple 不会在 27.0.1 修掉又在 27.2 复发，所以该 bug 大概率仍然存在。
-- 这个 PoC 是纯 API 滥用，**没有任何硬件偏移、内核地址或机型判断**，A19 Pro / iPhone 17 Pro Max 不构成额外变量。
-
-剩下的小概率：27.0.1 单独改了 containermanagerd 的 query 校验，而 27.2 又换回了旧行为。只能实测。
-
-三种结果：
-
-| 结果 | 含义 |
-|---|---|
-| `RESULT: PASS` + child read | 漏洞真实生效，可以读别的 App 容器 |
-| `RESULT: PARTIAL` | token 发了，但目录不可读，可能是 extension 语义变了 |
-| `RESULT: FAIL` | 27.0.1 已修，或 flags/class 变了，或 App Group 配错 |
+剩下的小概率是 27.0.1 单独改了 containermanagerd 的 query 校验，只能实测排除。
 
 ---
 
-## 3. 硬性前置条件（企业证书路线）
+## 3. 硬性前置条件
 
-企业证书可以做，但必须满足：
-
-1. **能创建 App Group 的开发者账号**。已核对 Apple 官方能力矩阵（`developer.apple.com/help/account/reference/supported-capabilities-ios/`，2026-11-10）：`App groups` 在 **ADP / ADEP / 免费 Apple Developer** 三列都是支持。企业证书（ADEP）确认可用。免费账号的主要差别是 profile 7 天过期、设备和 App ID 数量限制，不是 entitlement 本身。
+1. **能创建 App Group 的开发者账号**。Apple 官方能力矩阵（`developer.apple.com/help/account/reference/supported-capabilities-ios/`，2026-11-10 抓取）里 `App groups` 在 **ADP / ADEP / 免费 Apple Developer** 三列都支持。企业证书（ADEP）已确认可用。
 2. **显式 App ID**（不能是通配符 `*`），并勾选 **App Groups**。
 3. 在该 App ID 下注册 App Group，例如：
-   - App ID：`com.yourcompany.wqdiag`
-   - App Group：`group.com.yourcompany.wqdiag`
-4. 用该 App ID 生成 **In-House 分发 profile**（Profiles → Distribution → In House）。
-5. 导出带私钥的 **Apple Distribution / iPhone Distribution `.p12`**。
-6. 确认 profile 的 Entitlements 里有 `com.apple.security.application-groups`。工作流会自动打印这一项，没有就直接失败。
+   - App ID：`com.yourcompany.wqverify`
+   - App Group：`group.com.yourcompany.wqverify`
+4. 启用 App Groups 后**重新生成** In-House / development profile；旧 profile 不会自动带上。
+5. 确认 profile 的 Entitlements 里有 `com.apple.security.application-groups`。`ios.yml` 会打印并强校验这一项，没有直接失败。
+6. 导出带私钥的 **Apple Distribution / iPhone Distribution `.p12`**。
 
 > 通配符 App ID 的 profile 一定带不了 App Groups，这是最常见的翻车点。
 > 企业证书只用于你所在组织的内部设备，别对外分发。
-
-**In-House profile 不需要 UDID**，任何设备都能装，装完要在
-`设置 → 通用 → VPN 与设备管理` 里信任企业证书。
-如果你用的是企业团队的 **development** profile，则需要把设备 UDID 加进 profile，并把 `SIGNING_METHOD` 设为 `development`。
 
 ---
 
 ## 4. 构建
 
-### 4.1 GitHub Actions（推荐，免费）
+### 4.1 GitHub Actions：unsigned（`build.yml`）
 
-仓库可以是 public（macOS runner 对 public 仓库免费）。企业证书私钥放 Secrets 里是加密的，fork PR 拿不到；介意的话用 private 仓库，2000 分钟/月够跑几次。
+`workflow_dispatch` 手动触发。仓库变量：
 
-**Repository variables：**
+| 变量 | 示例 |
+|---|---|
+| `BUNDLE_ID` | `com.yourcompany.wqverify` |
+| `APP_GROUP` | `group.com.yourcompany.wqverify` |
 
-| 变量 | 示例 | 说明 |
+产物 `app-ipa`。这个 IPA **没有签名**，必须用包含该 App Group 的企业 profile 重签后才能安装。
+
+### 4.2 GitHub Actions：企业签名（`ios.yml`）
+
+`workflow_dispatch` 手动触发。仓库变量同上，另加：
+
+| 变量 | 默认 | 说明 |
 |---|---|---|
-| `BUNDLE_ID` | `com.yourcompany.wqdiag` | 必须与显式 App ID 一致 |
-| `APP_GROUP` | `group.com.yourcompany.wqdiag` | 必须已在 portal 注册并挂到 App ID |
 | `SIGNING_METHOD` | `enterprise` | In-House 用 `enterprise`；development profile 用 `development` |
 | `CERT_IDENTITY` | `Apple Distribution` | 老账号可能是 `iPhone Distribution`，按 `security find-identity` 输出填 |
 
-**Repository secrets：**
+Repository secrets：
 
 | Secret | 内容 |
 |---|---|
@@ -110,91 +101,68 @@
 | `KEYCHAIN_PASSWORD` | 随便一个临时密码，CI 内部用 |
 | `PROVISIONING_PROFILE_BASE64` | `.mobileprovision` 的 Base64 |
 | `TEAM_ID` | 10 位 Team ID |
-| `PROFILE_NAME` | profile 的 **Name**（不是文件名），可用 `PlistBuddy -c 'Print :Name'` 查看 |
+| `PROFILE_NAME` | profile 的 **Name**（不是文件名） |
 
 Windows 下生成 Base64（PowerShell，避免换行）：
 
 ```powershell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\dist.p12")) | Set-Clipboard
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\wqdiag.mobileprovision")) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\wqverify.mobileprovision")) | Set-Clipboard
 ```
 
-推上去后 Actions 会产出两个 artifact：
+产物 `wqverify-signed`。导出后会反查 `codesign --entitlements`，确认 App Group 真的在包里；不在就红。
 
-- `WQDiag-unsigned`：只证明能编译，不能装。
-- `WQDiag-signed`：企业签名 IPA，可直接安装。工作流在导出后会反查 `codesign --entitlements`，确认 App Group 真的在包里；不在就红。
+### 4.3 本地 Mac + Xcode
 
-### 4.2 本地 Mac + Xcode
+直接用 `wqverify.xcodeproj`：
 
-```bash
-brew install xcodegen
-# 编辑 Config.xcconfig：BUNDLE_ID / APP_GROUP / TEAM_ID
-xcodegen generate
-open WQDiag.xcodeproj
-```
+1. 打开工程，选 target `wqverify`。
+2. Signing & Capabilities 里设置 Team，确认 Bundle Identifier 和 App Groups。
+3. 如果没有 App Groups 这一项，点 `+` 添加，group 用你自己的。
+4. 选 iPhone 17 Pro Max，Run。
 
-选中你的 iPhone 17 Pro Max，Signing 里确认 Team 和 App Groups，直接 Run。
-本地跑比 Actions 少一层证书搬运，调试最快。
-
-### 4.3 直接跑你现在这个 `wqverify` 工程
-
-`wqverify.xcodeproj` 已经接入了同一套诊断，不再只是打印 argv/home：
-
-- 编译 `Sources/worse_query.m`、`Sources/wq_diag.m`、`Sources/Diagnostics.swift`、`Sources/DashboardView.swift`；
-- `INFOPLIST_FILE = Sources/Info.plist`
-- `SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h`
-- `CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements`
-- `APP_GROUP = group.com.example.wqverify`（改成你自己的 group）
-
-默认启动直接进诊断面板；`dvt launch "<BUNDLE_ID> --hello"` 仍然走原来的 argv/home 分支。
-`build.yml` 产出的是 unsigned IPA，必须用**包含该 App Group** 的企业 profile 重签后才可能通过 Stage 1。
+默认启动直接进诊断面板。`dvt launch "<BUNDLE_ID> --hello"` 仍走原来的 argv/home 分支。
 
 ---
 
 ## 5. 安装与运行
 
-- **Windows**：3uTools / iMazing 直接安装签名后的 IPA（`WQDiag-signed.ipa` 或你签好的 `wqverify` IPA），**不要重新签名**（重签会把 App Group 丢掉）。
+- **Windows**：3uTools / iMazing 直接安装已签名的 IPA，**不要重新签名**（重签会把 App Group 丢掉）。
 - **macOS**：Apple Configurator 2 → Add → Apps → 选 IPA；或 Xcode → Window → Devices and Simulators → `+`。
 - 首次启动前：`设置 → 通用 → VPN 与设备管理 → 信任企业开发者`。
-- 打开 App 会自动跑；顶部大卡片直接给结论，工具栏分享按钮导出完整报告，或点「复制结论」。右上角刷新按钮可重跑。
+- 打开 App 自动跑；右上角刷新按钮可重跑。
 
 ---
 
-## 6. 验证程序做了什么
+## 6. 面板怎么看
 
-只读，不写目标路径：
+顶部大卡片直接给结论：
 
-1. **Stage 1**：`containerURL(forSecurityApplicationGroupIdentifier:)` 是否为 nil。
-   nil 就直接结束，说明签名/profile 没带 App Group，后面不用看。
-2. **Stage 2**：`dlopen` + `dlsym` 检查 8 个 `container_query_*` 和 2 个 `sandbox_extension_*`。
-3. **Stage 3**：对 6 个路径逐个测试：
-   - 消费前先 `opendir`，记录是否被沙盒拒绝（差分证据）。
-   - `worse_query()` 主 flags；`-255` 时用 `create_dir=true` 绕过 lstat 门；仍失败再试 iOS 26 的 alt flags。
-   - 成功后再次 `opendir`，对比前后。
-4. **Stage 4**：对 AppGroup / Application / InternalDaemon / PluginKitPlugin / SystemGroup 的前两个子容器：
-   - 再消费一次子容器 extension；
-   - 读 `com.apple.containermanager.identifier`；
-   - 读 `.com.apple.mobile_container_manager.metadata.plist`；
-   - 列 `Library/Preferences` 并真实 `read()` 一个 plist。
+| 颜色 | 结论 | 含义 |
+|---|---|---|
+| 绿 | 沙盒逃逸生效 | 拿到 extension，目录/文件可读 |
+| 橙 | 逃逸部分生效 | token 发了，但读不到内容 |
+| 红 | 沙盒逃逸未生效 | 全部没拿到 extension，可能已修复或 flags 不对 |
+| 灰 | 无法验证 | App Group entitlement 没生效，先修签名/profile |
 
-判定：
+下面依次是：
+
+- 三个数字：`Extension`、`目录可读`、`跨容器读取`。
+- 阶段检查：App Group → 私有符号 → 路径逃逸 → 跨容器读取，每行带绿/红/橙图标。
+- 每个目标路径一张卡：右侧 `PASS / WARN / FAIL / SKIP`，下面写 `handle` 和「消费前 EPERM / 消费后可读 N 项」。
+- 子容器读取成功会绿色显示 `read=...B`。
+- 底部折叠 `原始日志`；工具栏可分享完整报告。
+- 报告同时写到 `Documents/wq_report.txt`，可用 `pymobiledevice3 apps pull` 取回。
+
+---
+
+## 7. 返回码与判定
 
 ```
 handles > 0 && (listings > 0 || child reads > 0)  -> PASS
 handles > 0 但读不到任何东西                       -> PARTIAL
 handles == 0                                      -> FAIL
 ```
-
-界面按这个判定直接上色：
-
-- 顶部大卡片：绿色 `沙盒逃逸生效` / 橙色 `逃逸部分生效` / 红色 `未生效` / 灰色 `无法验证`。
-- 三个数字：拿到几个 extension、几个目录可读、几个跨容器文件可读。
-- 阶段检查：4 行，每行带绿/红/橙状态图标。
-- 目标路径：每个路径一张卡，右侧 `PASS / WARN / FAIL / SKIP`，下面直接显示 `handle` 和“消费前 EPERM / 消费后可读 N 项”。
-- 子容器读取成功会以绿色单独列一行 `read=...B`。
-- 底部折叠 `原始日志`，工具栏可直接分享完整报告。
-
-返回码对照：
 
 | 返回值 | 含义 |
 |---|---|
@@ -208,37 +176,33 @@ handles == 0                                      -> FAIL
 
 ---
 
-## 7. 风险与边界
+## 8. 风险与边界
 
 - 每次调用会删除并重建 **你自己 App Group** 的 `Library/Caches`，别在里面放数据。
 - 成功后可以枚举并读取其他 App 容器中的内容，这是真实的数据访问能力。**只在你自己的设备上跑。**
-- 这玩意不是越狱，也不能提权到 root；原 README 也明确说了不构成 jailbreak。
+- 这不是越狱，不能提权到 root；原 README 也明确说了不构成 jailbreak。
 - 企业签名 App 依赖证书有效期；证书被吊销后 App 直接打不开。
-- 如果 Stage 1 就挂，先别怀疑漏洞，先查 profile 的 App Groups。
 
 ---
 
-## 8. 文件结构
+## 9. 文件结构
 
 ```
-wq-verify/
+wqverify/
 ├── .github/workflows/
-│   ├── ios.yml                   # WQDiag：免费编译 + 企业签名
-│   └── build.yml                 # wqverify：unsigned IPA（重签后装）
-├── Config.xcconfig               # WQDiag 本地构建参数
-├── project.yml                   # WQDiag 的 XcodeGen 描述
+│   ├── build.yml                 # unsigned IPA
+│   └── ios.yml                   # 企业签名 IPA
 ├── Signing/ExportOptions.plist   # 导出模板
-├── wqverify.xcodeproj            # 你现在在跑的 wqverify 工程（已接入诊断）
+├── wqverify.xcodeproj            # 唯一的 Xcode 工程
 ├── wqverify/
 │   ├── wqverifyApp.swift
 │   └── ContentView.swift         # 默认进 Dashboard，--hello 走旧分支
 └── Sources/
-    ├── App.swift                 # WQDiag 入口
-    ├── DashboardView.swift       # 可视化面板（两个 target 共用）
+    ├── DashboardView.swift       # 可视化面板
     ├── Diagnostics.swift         # 分阶段验证逻辑
     ├── worse_query.m/h           # 原 PoC，未改
     ├── wq_diag.m/h               # 只读探测辅助
     ├── Info.plist
-    ├── WQDiag.entitlements
-    └── WQDiag-Bridging-Header.h
+    ├── wqverify.entitlements
+    └── wqverify-Bridging-Header.h
 ```

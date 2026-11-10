@@ -25,8 +25,8 @@
 		A200000007 /* worse_query.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = worse_query.h; sourceTree = "<group>"; };
 		A200000008 /* wq_diag.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = wq_diag.m; sourceTree = "<group>"; };
 		A200000009 /* wq_diag.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wq_diag.h; sourceTree = "<group>"; };
-		A20000000A /* WQDiag-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQDiag-Bridging-Header.h; sourceTree = "<group>"; };
-		A20000000B /* WQDiag.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WQDiag.entitlements; sourceTree = "<group>"; };
+		A20000000A /* wqverify-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wqverify-Bridging-Header.h; sourceTree = "<group>"; };
+		A20000000B /* wqverify.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wqverify.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,8 +67,8 @@
 				A200000007 /* worse_query.h */,
 				A200000008 /* wq_diag.m */,
 				A200000009 /* wq_diag.h */,
-				A20000000A /* WQDiag-Bridging-Header.h */,
-				A20000000B /* WQDiag.entitlements */,
+				A20000000A /* wqverify-Bridging-Header.h */,
+				A20000000B /* wqverify.entitlements */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -161,20 +161,13 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				APP_GROUP = "group.com.example.wqverify";
-				CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Sources/wqverify.entitlements;
 				INFOPLIST_FILE = Sources/Info.plist;
 				REGISTER_APP_GROUPS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/wqverify-Bridging-Header.h;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "wq-verify";
-				INFOPLIST_KEY_UIFileSharingEnabled = YES;
-				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -194,20 +187,13 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				APP_GROUP = "group.com.example.wqverify";
-				CODE_SIGN_ENTITLEMENTS = Sources/WQDiag.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Sources/wqverify.entitlements;
 				INFOPLIST_FILE = Sources/Info.plist;
 				REGISTER_APP_GROUPS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = Sources/WQDiag-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/wqverify-Bridging-Header.h;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "wq-verify";
-				INFOPLIST_KEY_UIFileSharingEnabled = YES;
-				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

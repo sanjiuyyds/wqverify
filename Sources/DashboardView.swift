@@ -1,6 +1,6 @@
 //
 //  DashboardView.swift
-//  Shared dashboard for WQDiag and wqverify.
+//  Dashboard for the wqverify verification app.
 //
 
 import SwiftUI

@@ -3,5 +3,5 @@ DerivedData/
 Payload/
 *.ipa
 *.xcarchive
-WQDiag.xcodeproj/
+wqverify.xcodeproj/xcuserdata/
 .DS_Store

@@ -1,5 +1,5 @@
 //
-//  WQDiag-Bridging-Header.h
+//  wqverify-Bridging-Header.h
 //  Bridges the Objective-C PoC and the low-level probe helpers into Swift.
 //
 
