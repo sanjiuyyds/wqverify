@@ -185,6 +185,9 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 继续扩的话：全量多线程 inode 扫描、按 LaunchServices 数据库取全部 App、读更多文件类型。这些是工程量，不是漏洞边界。
 
+> 现已实现：全量多线程扫描、目录浏览、文件读取（≤1MB）、文本/Hex/Plist 查看、文本保存、单文件备份/恢复、写能力探针。见第 10 节。
+> 未实现：LaunchServices App 名称/图标、结构化 plist 编辑、Hex 编辑、整 App 备份/恢复。
+
 ### 6.2 `父级 token 2/6` 和 `严格 PASS` 不是一回事
 
 - **父级 token**：直接对父目录调用 `worse_query()` 成功的数量。iOS 27.0.1 只给
@@ -227,7 +230,48 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 ---
 
-## 9. 文件结构
+## 9. 容器浏览 / 全量枚举 / 写测试
+
+诊断面板底部的 **浏览容器 / 全量扫描 / 写测试** 进入新页面。
+
+### 9.1 全量多线程扫描
+
+- 用 `fsgetpath` 按 inode 扫六个父目录的直接子容器：
+  AppGroup、Data/Application、Data/InternalDaemon、Data/PluginKitPlugin、SystemGroup、containers/Data/System。
+- inode 上限取临时文件 inode + 1,000,000；inode 范围按 40 万一块切分，`dispatch_apply` 多线程扫，结果加锁合并。
+- 每个父目录最多保留 3000 个，总预算 90 秒。超时/超限会少结果，重跑即可。
+- 找到的容器按路径排序；点进去直接对该容器消费 extension 并浏览。
+
+### 9.2 目录浏览与文件查看
+
+- 进入容器后列出根目录；点目录继续下钻，点文件打开查看器。
+- 列目录和读文件都会单独对该路径 `worse_query()` 拿 token，不依赖父路径 token。
+- 文件读取上限 1MB；超过部分截断（Hex 只显示前 4KB）。
+- 查看器三种模式：
+  - **文本**：UTF-8；可切换到编辑，保存时先自动备份原始内容到 App `Documents/Backups/`，再 `O_TRUNC` 写回（保留 inode）。
+  - **Hex**：只读，前 4KB。
+  - **Plist**：解析后递归展开；只读。XML plist 想改就切文本模式。
+- 容器顶部显示 `com.apple.containermanager.identifier`（bundle id）。App 名称/图标需要解析 lsd 数据库，未做。
+
+### 9.3 写能力探针（风险中）
+
+- 只在所选容器的 **`tmp`** 下写一个唯一文件 `wq_probe-<UUID>.txt`，读回校验后立即 `unlink`。
+- 结果三种：
+  - `读写 token 确认`：写入 + 读回一致，token 是 read-write。
+  - `写入失败 errno ...`：token 只读，或 `tmp` 不存在。
+  - `拿不到 tmp 的 extension`：路径不可达。
+- **只在你拥有的、可牺牲的设备上跑。** 不碰 `tmp` 以外的任何文件，不创建目录。
+
+### 9.4 没做的部分
+
+- LaunchServices 元数据（App 名称、图标、大小）。
+- 结构化 plist 编辑器（增删改排序、二进制/XML 互转）。
+- Hex 编辑。
+- 整 App 容器备份/恢复；目前只有单文件备份和本次会话内恢复。
+
+---
+
+## 10. 文件结构
 
 ```
 wqverify/
@@ -241,9 +285,10 @@ wqverify/
 │   └── ContentView.swift         # 默认进 Dashboard，--hello 走旧分支
 └── Sources/
     ├── DashboardView.swift       # 可视化面板
+    ├── BrowserView.swift         # 全量扫描 / 目录浏览 / 查看器 / 写探针
     ├── Diagnostics.swift         # 分阶段验证逻辑
     ├── worse_query.m/h           # 原 PoC，未改
-    ├── wq_diag.m/h               # 只读探测辅助
+    ├── wq_diag.m/h               # 探测辅助（含多线程扫描、写/删）
     ├── Info.plist
     ├── wqverify.entitlements
     └── wqverify-Bridging-Header.h

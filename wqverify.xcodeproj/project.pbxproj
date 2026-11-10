@@ -13,6 +13,7 @@
 		A100000004 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000005; };
 		A100000005 /* worse_query.m in Sources */ = {isa = PBXBuildFile; fileRef = A200000006; };
 		A100000006 /* wq_diag.m in Sources */ = {isa = PBXBuildFile; fileRef = A200000008; };
+		A100000007 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000C; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		A200000003 /* wqverify.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wqverify.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A200000004 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
 		A200000005 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A20000000C /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
 		A200000006 /* worse_query.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = worse_query.m; sourceTree = "<group>"; };
 		A200000007 /* worse_query.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = worse_query.h; sourceTree = "<group>"; };
 		A200000008 /* wq_diag.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = wq_diag.m; sourceTree = "<group>"; };
@@ -63,6 +65,7 @@
 			children = (
 				A200000004 /* Diagnostics.swift */,
 				A200000005 /* DashboardView.swift */,
+				A20000000C /* BrowserView.swift */,
 				A200000006 /* worse_query.m */,
 				A200000007 /* worse_query.h */,
 				A200000008 /* wq_diag.m */,
@@ -150,6 +153,7 @@
 				A100000004 /* DashboardView.swift in Sources */,
 				A100000005 /* worse_query.m in Sources */,
 				A100000006 /* wq_diag.m in Sources */,
+				A100000007 /* BrowserView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

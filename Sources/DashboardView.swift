@@ -60,7 +60,15 @@ struct DashboardView: View {
                         TargetSection(report: report)
                         RawSection(report: report)
 
-                        Text("只读探测。严格 PASS 只认真实文件读取（read=...B 或 metadata）；id ok 仅是 container id xattr，不算 PASS。仅用于你拥有的设备。")
+                        NavigationLink {
+                            ContainerListView()
+                        } label: {
+                            Label("浏览容器 / 全量扫描 / 写测试", systemImage: "folder.badge.gearshape")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Text("默认只读。写测试只写目标 tmp 的唯一探针文件并立即删除；文本保存和恢复需你二次确认。仅用于你拥有的设备。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)

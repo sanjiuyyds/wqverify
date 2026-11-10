@@ -1,17 +1,19 @@
 //
 //  wq_diag.m
-//  Read-only diagnostic helpers for the worse_query verification harness.
+//  Diagnostic and file-access helpers for the worse_query verification harness.
 //
 
 #import "wq_diag.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/fsgetpath.h>
 #include <sys/mount.h>
@@ -156,6 +158,153 @@ NSDictionary<NSString *, NSArray<NSString *> *> *wq_scan_children(NSArray<NSStri
     }
     free(prefixes);
     free(lengths);
+    return (NSDictionary<NSString *, NSArray<NSString *> *> *)found;
+}
+
+int wq_writefile(NSString *path, NSData *data, BOOL overwrite) {
+    int flags = O_WRONLY | O_CREAT | O_NOFOLLOW | (overwrite ? O_TRUNC : O_EXCL);
+    int fd = open(path.fileSystemRepresentation, flags, 0600);
+    if (fd < 0) return errno;
+
+    const uint8_t *bytes = data.bytes;
+    NSUInteger remaining = data.length;
+    NSUInteger offset = 0;
+    int result = 0;
+
+    while (remaining > 0) {
+        ssize_t n = write(fd, bytes + offset, remaining);
+        if (n <= 0) { result = errno ? errno : EIO; break; }
+        offset += (NSUInteger)n;
+        remaining -= (NSUInteger)n;
+    }
+    if (result == 0 && fsync(fd) != 0) result = errno;
+    close(fd);
+    return result;
+}
+
+int wq_removefile(NSString *path) {
+    if (unlink(path.fileSystemRepresentation) != 0) return errno;
+    return 0;
+}
+
+NSDictionary<NSString *, NSArray<NSString *> *> *wq_scan_children_all(NSArray<NSString *> *parents,
+                                                                      uint64_t maxInode,
+                                                                      NSInteger limitPerParent,
+                                                                      double seconds) {
+    NSMutableArray<NSString *> *dirs = [NSMutableArray array];
+    for (NSString *parent in parents) {
+        if (![parent isKindOfClass:[NSString class]] || parent.length == 0) continue;
+        NSString *dir = parent;
+        while (dir.length > 1 && [dir hasSuffix:@"/"]) {
+            dir = [dir substringToIndex:dir.length - 1];
+        }
+        if (![dirs containsObject:dir]) [dirs addObject:dir];
+    }
+    if (dirs.count == 0 || maxInode < 1) return @{};
+
+    struct statfs sfs;
+    if (statfs("/private/var", &sfs) != 0) return @{};
+    fsid_t fsid = sfs.f_fsid;
+
+    NSUInteger count = dirs.count;
+    char **prefixes = calloc(count, sizeof(char *));
+    size_t *lengths = calloc(count, sizeof(size_t));
+    if (!prefixes || !lengths) {
+        if (prefixes) free(prefixes);
+        if (lengths) free(lengths);
+        return @{};
+    }
+
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *found =
+        [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < count; i++) {
+        found[dirs[i]] = [NSMutableArray array];
+
+        char buf[PATH_MAX];
+        if (![dirs[i] getFileSystemRepresentation:buf maxLength:sizeof(buf)]) continue;
+        size_t len = strlen(buf);
+        if (len == 1 && buf[0] == '/') len = 0;
+        prefixes[i] = strdup(buf);
+        lengths[i] = len;
+    }
+
+    NSLock *lock = [NSLock new];
+    atomic_bool *timedOut = malloc(sizeof(atomic_bool));
+    if (!timedOut) {
+        for (NSUInteger i = 0; i < count; i++) {
+            if (prefixes[i]) free(prefixes[i]);
+        }
+        free(prefixes);
+        free(lengths);
+        return @{};
+    }
+    atomic_init(timedOut, false);
+
+    double deadline = CFAbsoluteTimeGetCurrent() + (seconds > 0 ? seconds : 90.0);
+    const uint64_t chunk = 400000;
+    size_t chunks = (size_t)((maxInode + chunk - 1) / chunk);
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+
+    dispatch_apply(chunks, queue, ^(size_t ci) {
+        if (atomic_load(timedOut)) return;
+
+        uint64_t first = 1 + (uint64_t)ci * chunk;
+        uint64_t last = first + chunk - 1;
+        if (last > maxInode) last = maxInode;
+
+        NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *local =
+            [NSMutableDictionary dictionary];
+        char buffer[PATH_MAX];
+
+        for (uint64_t inode = first; inode <= last; inode++) {
+            if ((inode & 0xFFFF) == 0 && CFAbsoluteTimeGetCurrent() > deadline) {
+                atomic_store(timedOut, true);
+                break;
+            }
+
+            ssize_t n = fsgetpath(buffer, sizeof(buffer), &fsid, inode);
+            if (n <= 0) continue;
+
+            for (NSUInteger i = 0; i < count; i++) {
+                if (!prefixes[i]) continue;
+                size_t len = lengths[i];
+                if (strncmp(buffer, prefixes[i], len) != 0) continue;
+                if (buffer[len] != '/') continue;
+                if (strchr(buffer + len + 1, '/')) continue;
+
+                NSMutableArray<NSString *> *arr = local[dirs[i]];
+                if (!arr) {
+                    arr = [NSMutableArray array];
+                    local[dirs[i]] = arr;
+                }
+                if (limitPerParent > 0 && (NSInteger)arr.count >= limitPerParent) continue;
+
+                NSString *path = [NSString stringWithUTF8String:buffer];
+                if (path) [arr addObject:path];
+                break;
+            }
+        }
+
+        if (local.count == 0) return;
+
+        [lock lock];
+        for (NSString *key in local) {
+            NSMutableArray<NSString *> *dst = found[key];
+            for (NSString *path in local[key]) {
+                if (![dst containsObject:path]) [dst addObject:path];
+                if (limitPerParent > 0 && (NSInteger)dst.count >= limitPerParent) break;
+            }
+        }
+        [lock unlock];
+    });
+
+    for (NSUInteger i = 0; i < count; i++) {
+        if (prefixes[i]) free(prefixes[i]);
+    }
+    free(prefixes);
+    free(lengths);
+    free(timedOut);
+
     return (NSDictionary<NSString *, NSArray<NSString *> *> *)found;
 }
 

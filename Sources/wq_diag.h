@@ -1,9 +1,10 @@
 //
 //  wq_diag.h
-//  Read-only diagnostic helpers for the worse_query verification harness.
+//  Diagnostic and file-access helpers for the worse_query verification harness.
 //
-//  These helpers only perform lookups (opendir/read/open/getxattr). They do
-//  not modify anything outside the app's own App Group container.
+//  Lookup helpers are read-only. wq_writefile/wq_removefile are only used by
+//  the explicit write probe (target tmp, unique file, deleted immediately) and
+//  by the explicit text save action after user confirmation.
 //
 
 #ifndef wq_diag_h
@@ -32,6 +33,20 @@ NSDictionary<NSString *, NSArray<NSString *> *> *wq_scan_children(NSArray<NSStri
                                                                   uint64_t maxInode,
                                                                   NSInteger limitPerParent,
                                                                   double seconds);
+
+/// Multithreaded version of wq_scan_children. Chunks the inode range and
+/// merges results under a lock. 0 limit means unlimited.
+NSDictionary<NSString *, NSArray<NSString *> *> *wq_scan_children_all(NSArray<NSString *> *parents,
+                                                                      uint64_t maxInode,
+                                                                      NSInteger limitPerParent,
+                                                                      double seconds);
+
+/// Writes data to path. overwrite=NO uses O_EXCL; YES truncates in place.
+/// Returns 0 on success, errno on failure. O_NOFOLLOW is always set.
+int wq_writefile(NSString *path, NSData *data, BOOL overwrite);
+
+/// unlink(2). Returns 0 on success, errno on failure.
+int wq_removefile(NSString *path);
 
 /// Every App Group string present in this app's own code-signing entitlements.
 /// Empty when the signer dropped the application-groups entitlement.
