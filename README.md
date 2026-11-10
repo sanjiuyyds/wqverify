@@ -160,14 +160,14 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 
 | 颜色 | 结论 | 含义 |
 |---|---|---|
-| 绿 | 沙盒逃逸生效 | 拿到 extension，目录/文件可读 |
-| 橙 | 逃逸部分生效 | token 发了，但读不到内容 |
+| 绿 | 沙盒逃逸生效 | 至少一次真实文件内容读取（`read=...B` 或 metadata plist） |
+| 橙 | 逃逸部分生效 | 只拿到 extension / id xattr / 目录列表，没有真实文件读取 |
 | 红 | 沙盒逃逸未生效 | 全部没拿到 extension，可能已修复或 flags 不对 |
 | 灰 | 无法验证 | App Group entitlement 没生效，先修签名/profile |
 
 下面依次是：
 
-- 四个数字：`父路径`（拿到 extension 的目标数）、`目录可读`、`跨容器读取`（文件内容、metadata plist、container id xattr 都算）、`扫描容器`（27.0.1 上父路径 -6 时通过 fsgetpath 或已知名字找到的子容器数）。
+- 四个数字：`严格 PASS`（有真实文件读取的目标数）、`文件读取`（`read=...B` 或 metadata plist）、`id 访问`（只读到 container id xattr）、`扫描容器`（27.0.1 上父路径 -6 时找到的子容器数）。
 - 阶段检查：App Group → 私有符号 → 路径逃逸 → 跨容器读取，每行带绿/红/橙图标。
 - 每个目标路径一张卡：右侧 `PASS / WARN / FAIL / SKIP`，下面写 `handle` 和「消费前 EPERM / 消费后可读 N 项」。
 - 子容器读取成功会绿色显示 `read=...B`。
@@ -181,29 +181,29 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 - 每个父路径最多取 8 个子容器，fsgetpath 扫描预算 30 秒。
 - SystemGroup 不依赖扫描，直接试一组已知容器名（`systemgroup.com.apple.*`）。
 - 每个容器会试 `Library/Preferences`、`Documents`、`Library/Caches`、`tmp`，读到第一个文件就停。
-- `container id` xattr 和 metadata plist 读取都算跨容器访问，所以 daemon / plugin 容器即使 Preferences 为空也会显示 `id ok`。
+- `container id` xattr 只显示 `id ok`，**不算严格 PASS**；metadata plist 是真实文件读取，算。
 
 继续扩的话：全量多线程 inode 扫描、按 LaunchServices 数据库取全部 App、读更多文件类型。这些是工程量，不是漏洞边界。
 
-### 6.2 `父级 token 2/6` 和 `可达目标 6/6` 不是一回事
+### 6.2 `父级 token 2/6` 和 `严格 PASS` 不是一回事
 
 - **父级 token**：直接对父目录调用 `worse_query()` 成功的数量。iOS 27.0.1 只给
   `AppGroup` 根目录和 `System 数据` 签发，所以是 2/6。
-- **可达目标**：包括父级 token，也包括通过 fsgetpath / 已知名字找到子容器后
-  逐个消费 extension 的目标。它才是“能不能访问”的结论。
+- **严格 PASS**：只有读到真实文件内容（Preferences / Documents / Caches / tmp
+  或 metadata plist）的目标才算。只拿到 extension、只列目录、只读 id xattr 都算 WARN。
 - 那四个父路径返回 `-6` 是 iOS 27.0.1 的系统行为，不是失败；它们的子容器仍然
   可以逐个拿 extension，并读到真实文件（iBooks / Notes / Maps 已实测）。
-- `id ok` 表示只读到 container id xattr，`read=...B` 才是文件内容；两者都是
-  跨容器访问，但证据强度不同。
+- `id ok` 表示只读到 container id xattr，`read=...B` 才是文件内容。严格模式下
+  前者只给 WARN，后者才给 PASS。
 
 ---
 
 ## 7. 返回码与判定
 
 ```
-handles > 0 && (listings > 0 || child reads > 0)  -> PASS
-handles > 0 但读不到任何东西                       -> PARTIAL
-handles == 0                                      -> FAIL
+至少一次真实文件读取（read=...B 或 metadata）  -> PASS
+只拿到 extension / id xattr / 目录列表            -> PARTIAL
+什么都没拿到                                      -> FAIL
 ```
 
 | 返回值 | 含义 |

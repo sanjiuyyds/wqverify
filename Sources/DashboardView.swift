@@ -60,7 +60,7 @@ struct DashboardView: View {
                         TargetSection(report: report)
                         RawSection(report: report)
 
-                        Text("只读探测。id ok = 只读到 container id xattr；read=...B 才是真实文件内容。仅用于你拥有的设备。")
+                        Text("只读探测。严格 PASS 只认真实文件读取（read=...B 或 metadata）；id ok 仅是 container id xattr，不算 PASS。仅用于你拥有的设备。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -164,15 +164,15 @@ struct MetricsGrid: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MetricTile(title: "可达目标",
+            MetricTile(title: "严格 PASS",
                        value: "\(report.reachableTargets)/\(report.targets.count)",
                        tint: .green)
-            MetricTile(title: "父级 token",
-                       value: "\(report.handles)/\(report.targets.count)",
-                       tint: .blue)
-            MetricTile(title: "跨容器读取",
+            MetricTile(title: "文件读取",
                        value: "\(report.deepReads)",
                        tint: .purple)
+            MetricTile(title: "id 访问",
+                       value: "\(report.idReads)",
+                       tint: .orange)
             MetricTile(title: "扫描容器",
                        value: "\(report.scanChildrenTotal)",
                        tint: .indigo)

@@ -42,15 +42,21 @@ enum Diagnostics {
         let entryCount: Int
         let children: [ChildResult]
         let scanChildren: Int
-        let scanReads: Int
 
-        var childReads: Int {
-            children.filter { $0.readBytes > 0 || $0.metadataRead || $0.idRead }.count
+        /// Strict: real file content from Preferences/Documents/Caches/tmp,
+        /// or the container metadata plist. The id xattr alone does not count.
+        var fileReads: Int {
+            children.filter { $0.readBytes > 0 || $0.metadataRead }.count
+        }
+
+        /// Extension worked and the id xattr was read, but no file content.
+        var idOnlyReads: Int {
+            children.filter { $0.idRead && $0.readBytes == 0 && !$0.metadataRead }.count
         }
 
         var status: Status {
-            if handle >= 0 && postListable { return .pass }
-            if scanReads > 0 { return .pass }
+            if fileReads > 0 { return .pass }
+            if handle >= 0 && postListable { return .warn }
             if scanChildren > 0 { return .warn }
             if handle >= 0 { return .warn }
             if !exists && handle == -255 { return .skip }
@@ -59,14 +65,15 @@ enum Diagnostics {
 
         var summaryLine: String {
             if scanChildren > 0 {
-                return "父路径 \(handle) · 扫描 \(scanChildren) 个子容器 · 可读 \(scanReads)"
+                return "父路径 \(handle) · 扫描 \(scanChildren) 个子容器 · 文件 \(fileReads) · id \(idOnlyReads)"
             }
             var parts: [String] = ["handle \(handle)"]
             parts.append(preListable ? "消费前可读" : "消费前 EPERM")
             if handle >= 0 {
                 parts.append(postListable ? "消费后 \(entryCount) 项" : "消费后拒绝")
             }
-            if childReads > 0 { parts.append("子读取 \(childReads)") }
+            if fileReads > 0 { parts.append("文件 \(fileReads)") }
+            if idOnlyReads > 0 { parts.append("id \(idOnlyReads)") }
             return parts.joined(separator: " · ")
         }
     }
@@ -82,6 +89,7 @@ enum Diagnostics {
         let handles: Int
         let listings: Int
         let deepReads: Int
+        let idReads: Int
         let preDenied: Int
         let symbolReport: String
         let groupIdentifier: String
@@ -215,6 +223,7 @@ enum Diagnostics {
                           handles: 0,
                           listings: 0,
                           deepReads: 0,
+                          idReads: 0,
                           preDenied: 0,
                           symbolReport: "not checked",
                           groupIdentifier: effectiveGroup,
@@ -243,6 +252,7 @@ enum Diagnostics {
                           handles: 0,
                           listings: 0,
                           deepReads: 0,
+                          idReads: 0,
                           preDenied: 0,
                           symbolReport: symbolReport,
                           groupIdentifier: effectiveGroup,
@@ -258,6 +268,7 @@ enum Diagnostics {
         var deepReads = 0
         var preDenied = 0
         var scanTotal = 0
+        var idTotal = 0
         var scanCache: [String: [String]]?
 
         for (i, target) in targets.enumerated() {
@@ -295,7 +306,6 @@ enum Diagnostics {
             var postErr: Int32 = 0
             var children: [ChildResult] = []
             var scanChildren = 0
-            var scanReads = 0
 
             if handle >= 0 {
                 handles += 1
@@ -362,11 +372,14 @@ enum Diagnostics {
                 }
 
                 scanChildren = scannedPaths.count + knownCount
-                scanReads = probe.reads
                 children = probe.results
                 deepReads += probe.reads
                 scanTotal += scanChildren
             }
+
+            idTotal += children.filter {
+                $0.idRead && $0.readBytes == 0 && !$0.metadataRead
+            }.count
 
             if post != nil { listings += 1 }
 
@@ -380,8 +393,7 @@ enum Diagnostics {
                                         postErrno: postErr,
                                         entryCount: post?.count ?? 0,
                                         children: children,
-                                        scanChildren: scanChildren,
-                                        scanReads: scanReads))
+                                        scanChildren: scanChildren))
         }
 
         // MARK: Stage 3/4 summary
@@ -397,12 +409,10 @@ enum Diagnostics {
                             status: stage3Status,
                             detail: "\(handles)/\(targets.count) 个父路径拿到 extension，\(listings) 个目录可读，扫描补充 \(scanTotal) 个子容器"))
 
-        let stage4Status: Status = deepReads > 0 ? .pass : (handles > 0 ? .warn : .skip)
+        let stage4Status: Status = deepReads > 0 ? .pass : (idTotal > 0 ? .warn : (handles > 0 ? .warn : .skip))
         stages.append(Stage(title: "跨容器真实读取",
                             status: stage4Status,
-                            detail: deepReads > 0
-                                ? "\(deepReads) 个跨容器文件/元数据读取成功"
-                                : "没有跨容器文件读取成功"))
+                            detail: "\(deepReads) 个真实文件读取，\(idTotal) 个仅 id 访问"))
 
         // MARK: Verdict
         let reachable = results.filter { $0.status == .pass }.count
@@ -410,14 +420,14 @@ enum Diagnostics {
         let headline: String
         let subheadline: String
 
-        if deepReads > 0 || (handles > 0 && listings > 0) {
+        if deepReads > 0 {
             verdict = .pass
             headline = "沙盒逃逸生效"
-            subheadline = "目标 \(reachable)/\(targets.count) 可达，\(deepReads) 个跨容器读取；父级 token \(handles)/\(targets.count)"
+            subheadline = "严格 PASS \(reachable)/\(targets.count)，真实文件读取 \(deepReads)，仅 id \(idTotal)；父级 token \(handles)/\(targets.count)"
         } else if handles > 0 || scanTotal > 0 {
             verdict = .partial
             headline = "逃逸部分生效"
-            subheadline = "找到了容器，但目录/文件读不到"
+            subheadline = "找到了容器 / 拿到了 id，但没有真实文件读取"
         } else {
             verdict = .fail
             headline = "沙盒逃逸未生效"
@@ -427,7 +437,7 @@ enum Diagnostics {
         emit("")
         emit("== VERDICT ==")
         emit("\(headline) - \(subheadline)")
-        emit("handles \(handles)/\(targets.count), listings \(listings), deep reads \(deepReads), pre-denied \(preDenied)")
+        emit("handles \(handles)/\(targets.count), listings \(listings), file reads \(deepReads), id-only \(idTotal), pre-denied \(preDenied)")
         emit("[NOTE] read-only; only writes inside its own App Group")
 
         return Report(verdict: verdict,
@@ -440,6 +450,7 @@ enum Diagnostics {
                       handles: handles,
                       listings: listings,
                       deepReads: deepReads,
+                      idReads: idTotal,
                       preDenied: preDenied,
                       symbolReport: symbolReport,
                       groupIdentifier: effectiveGroup,
@@ -460,7 +471,7 @@ enum Diagnostics {
                                         name: child,
                                         group: group,
                                         emit: emit)
-            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
+            if result.readBytes > 0 || result.metadataRead { reads += 1 }
             out.append(result)
         }
 
@@ -477,7 +488,7 @@ enum Diagnostics {
         for path in paths {
             let name = (path as NSString).lastPathComponent
             let result = probeContainer(path: path, name: name, group: group, emit: emit)
-            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
+            if result.readBytes > 0 || result.metadataRead { reads += 1 }
             results.append(result)
         }
 
@@ -500,7 +511,7 @@ enum Diagnostics {
                                         emit: emit)
             guard result.access else { continue }
             results.append(result)
-            if result.readBytes > 0 || result.metadataRead || result.idRead { reads += 1 }
+            if result.readBytes > 0 || result.metadataRead { reads += 1 }
         }
 
         return (results.count, reads, results)
@@ -613,7 +624,7 @@ extension Diagnostics.Report {
         s += "\(subheadline)\n"
         s += "iOS \(iosVersion) | \(device)\n"
         s += "App Group: \(groupIdentifier)\n"
-        s += "目标可达 \(reachableTargets)/\(targets.count) | 父级 token \(handles)/\(targets.count) | 目录可读 \(listings) | 跨容器读取 \(deepReads) | 扫描子容器 \(scanChildrenTotal)\n\n"
+        s += "严格 PASS \(reachableTargets)/\(targets.count) | 文件读取 \(deepReads) | 仅 id \(idReads) | 父级 token \(handles)/\(targets.count) | 目录可读 \(listings) | 扫描子容器 \(scanChildrenTotal)\n\n"
 
         for t in targets {
             let pre = t.preListable ? "可读" : "EPERM(\(t.preErrno))"
@@ -622,7 +633,7 @@ extension Diagnostics.Report {
             s += "  \(t.path)\n"
             s += "  handle=\(t.handle) 消费前=\(pre) 消费后=\(post) 子读取=\(t.childReads)\n"
             if t.scanChildren > 0 {
-                s += "  扫描=\(t.scanChildren) 个子容器 可读=\(t.scanReads)\n"
+                s += "  扫描=\(t.scanChildren) 个子容器 文件=\(t.fileReads) 仅id=\(t.idOnlyReads)\n"
             }
         }
 
