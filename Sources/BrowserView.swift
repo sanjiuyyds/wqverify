@@ -376,6 +376,10 @@ struct FileViewerView: View {
         _mode = State(initialValue: FileViewerView.initialMode(for: data))
     }
 
+    private var canEditText: Bool {
+        data.count < 1_048_576 && String(data: data, encoding: .utf8) != nil
+    }
+
     static func initialMode(for data: Data) -> Mode {
         if (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) != nil {
             return .plist
@@ -396,6 +400,13 @@ struct FileViewerView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding()
+
+                if data.count >= 1_048_576 {
+                    Text("文件可能超过 1MB，只读取了前 1MB；已禁用保存/恢复。")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal)
+                }
 
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -419,7 +430,7 @@ struct FileViewerView: View {
                         Button("备份到 App Documents") { backup() }
                         Button("从本次备份恢复") { showRestoreConfirm = true }
                             .disabled(backupData == nil)
-                        if mode == .text {
+                        if mode == .text && canEditText {
                             Button(editable ? "取消编辑" : "编辑文本") {
                                 editable.toggle()
                             }
@@ -574,6 +585,10 @@ struct FileViewerView: View {
     }
 
     private func save() {
+        guard canEditText else {
+            status = "二进制/超大文件不支持文本保存。"
+            return
+        }
         ensureBackup()
         let payload = Data(text.utf8)
 
@@ -597,7 +612,10 @@ struct FileViewerView: View {
     }
 
     private func restore() {
-        guard let payload = backupData else { return }
+        guard let payload = backupData, canEditText else {
+            status = "二进制/超大文件不支持恢复。"
+            return
+        }
 
         let parent = (path as NSString).deletingLastPathComponent()
 
