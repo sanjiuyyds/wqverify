@@ -41,9 +41,10 @@ jobs:
             APP_GROUP="$APP_GROUP" \
             build 2>&1 | tee build.log
 
-      # 这个 IPA 是 unsigned 的。要跑 PoC，必须用你的企业证书/profile 重签，
-      # 且 profile 的 Entitlements 必须包含 com.apple.security.application-groups，
-      # 值与上面的 APP_GROUP 一致，否则 App 会在 Stage 1 直接判 untestable。
+      # 这个 IPA 是 unsigned 的。要跑 PoC，重签时必须注入一个 App Group：
+      # - AltStore / SideStore / Sideloadly 会自动创建；
+      # - 企业证书 + profile 需要 profile 里带 App Group。
+      # App 会从自己的签名里读实际拿到的 group，不依赖上面这个 APP_GROUP。
 
       - name: Show errors if failed
         if: failure()

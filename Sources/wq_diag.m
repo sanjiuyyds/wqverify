@@ -13,6 +13,42 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
+// SecTask lives in Security.framework. The public headers do not always expose
+// these two symbols, so declare them the same way WQFiles does.
+typedef struct __SecTask *SecTaskRef;
+extern SecTaskRef SecTaskCreateFromSelf(CFAllocatorRef allocator);
+extern CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task,
+                                                CFStringRef entitlement,
+                                                CFErrorRef *error);
+
+NSArray<NSString *> *wq_entitled_app_groups(void) {
+    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (!task) return @[];
+
+    CFTypeRef value = SecTaskCopyValueForEntitlement(
+        task, CFSTR("com.apple.security.application-groups"), NULL);
+    CFRelease(task);
+
+    if (!value) return @[];
+    NSArray *raw = (__bridge_transfer NSArray *)value;
+    if (![raw isKindOfClass:[NSArray class]]) return @[];
+
+    NSMutableArray<NSString *> *groups = [NSMutableArray array];
+    for (id item in raw) {
+        if ([item isKindOfClass:[NSString class]]) [groups addObject:item];
+    }
+    return groups;
+}
+
+NSString *wq_own_app_group(void) {
+    for (NSString *candidate in wq_entitled_app_groups()) {
+        NSURL *root = [NSFileManager.defaultManager
+                       containerURLForSecurityApplicationGroupIdentifier:candidate];
+        if (root) return candidate;
+    }
+    return nil;
+}
+
 NSString *wq_diag_symbol_report(void) {
     void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
     if (!mgr) {

@@ -115,28 +115,47 @@ enum Diagnostics {
         // MARK: Stage 1 - App Group entitlement
         emit("== Stage 1: App Group entitlement ==")
         let fm = FileManager.default
+
+        // The signer injects the real group. Never trust a hardcoded ID:
+        // AltStore / SideStore / Sideloadly create their own group, and an
+        // enterprise profile carries whatever group was registered with it.
+        let configuredGroup = group
+        let entitledGroups = (wq_entitled_app_groups() as? [String]) ?? []
+        let discoveredGroup = wq_own_app_group()
+        let effectiveGroup = discoveredGroup ?? configuredGroup
+
+        let entitledText = entitledGroups.isEmpty
+            ? "(none)"
+            : entitledGroups.joined(separator: ", ")
+
+        emit("    configured: \(configuredGroup.isEmpty ? "(empty)" : configuredGroup)")
+        emit("    signature:  \(entitledText)")
+        emit("    effective:  \(effectiveGroup.isEmpty ? "(none)" : effectiveGroup)")
+
         var groupPath = ""
         var groupOK = false
 
-        if group.isEmpty {
-            emit("[FAIL] WQAppGroup is empty in Info.plist")
-            stages.append(Stage(title: "App Group entitlement",
-                                status: .fail,
-                                detail: "Info.plist 中 WQAppGroup 为空"))
-        } else if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: group) {
+        if !effectiveGroup.isEmpty,
+           let url = fm.containerURL(forSecurityApplicationGroupIdentifier: effectiveGroup) {
             groupOK = true
             groupPath = url.path
             emit("[PASS] group container: \(url.path)")
             stages.append(Stage(title: "App Group entitlement",
                                 status: .pass,
-                                detail: group))
+                                detail: "使用签名注入的 group：\(effectiveGroup)"))
             try? fm.createDirectory(at: url.appendingPathComponent("Library"),
                                     withIntermediateDirectories: true)
         } else {
-            emit("[FAIL] containerURL(forSecurityApplicationGroupIdentifier:) == nil")
+            let detail: String
+            if entitledGroups.isEmpty {
+                detail = "签名里没有 application-groups entitlement；换一个会注入 App Group 的签名工具（AltStore/SideStore/Sideloadly），或用带 App Group 的显式 profile"
+            } else {
+                detail = "签名里有 [\(entitledText)]，但没有可用容器；profile 未授权这个 group"
+            }
+            emit("[FAIL] \(detail)")
             stages.append(Stage(title: "App Group entitlement",
                                 status: .fail,
-                                detail: "entitlement 缺失，或 group 不在 signing profile 中"))
+                                detail: detail))
         }
         emit("")
 
@@ -153,7 +172,7 @@ enum Diagnostics {
                           deepReads: 0,
                           preDenied: 0,
                           symbolReport: "not checked",
-                          groupIdentifier: group,
+                          groupIdentifier: effectiveGroup,
                           groupPath: "",
                           rawLog: raw.joined(separator: "\n"))
         }
@@ -181,7 +200,7 @@ enum Diagnostics {
                           deepReads: 0,
                           preDenied: 0,
                           symbolReport: symbolReport,
-                          groupIdentifier: group,
+                          groupIdentifier: effectiveGroup,
                           groupPath: groupPath,
                           rawLog: raw.joined(separator: "\n"))
         }
@@ -212,15 +231,15 @@ enum Diagnostics {
             let preText = preListable ? "listable (\(pre?.count ?? 0)+)" : "denied errno=\(preErr)"
             emit("    before: \(preText)")
 
-            var handle = worse_query(target.path, group, false, false)
+            var handle = worse_query(target.path, effectiveGroup, false, false)
             emit("    worse_query(false,false) -> \(handle) \(code(handle))")
 
             if handle == -255 {
-                handle = worse_query(target.path, group, false, true)
+                handle = worse_query(target.path, effectiveGroup, false, true)
                 emit("    worse_query(false,true)  -> \(handle) \(code(handle))")
             }
             if handle < 0 {
-                let alt = worse_query(target.path, group, true, false)
+                let alt = worse_query(target.path, effectiveGroup, true, false)
                 emit("    worse_query(true,false)  -> \(alt) \(code(alt))")
                 if alt >= 0 { handle = alt }
             }
@@ -242,7 +261,7 @@ enum Diagnostics {
                 if target.deep, let post = post {
                     let probe = deepProbe(root: target.path,
                                           children: Array(post.prefix(2)),
-                                          group: group,
+                                          group: effectiveGroup,
                                           emit: emit)
                     deepReads += probe.reads
                     children = probe.children
@@ -325,7 +344,7 @@ enum Diagnostics {
                       deepReads: deepReads,
                       preDenied: preDenied,
                       symbolReport: symbolReport,
-                      groupIdentifier: group,
+                      groupIdentifier: effectiveGroup,
                       groupPath: groupPath,
                       rawLog: raw.joined(separator: "\n"))
     }

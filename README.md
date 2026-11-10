@@ -68,6 +68,20 @@ iOS 26 和 27 的 query flags 不同：
 > 通配符 App ID 的 profile 一定带不了 App Groups，这是最常见的翻车点。
 > 企业证书只用于你所在组织的内部设备，别对外分发。
 
+### 3.1 group 是签名注入的，不是写死的
+
+App 启动时用 `SecTaskCopyValueForEntitlement` 读取自己签名里的
+`com.apple.security.application-groups`，逐个调用
+`containerURLForSecurityApplicationGroupIdentifier:`，用真正能解析出容器的那个。
+这和 [WQFiles](https://github.com/kolbicz/WQFiles) 的做法一致。
+
+所以：
+
+- **AltStore / SideStore / Sideloadly + Apple ID**：签名工具会自动创建并注入 group，直接可用。
+- **企业证书 + provisioning profile**：profile 必须包含一个 App Group；通配符 profile 不行。
+- `Info.plist` 里的 `WQAppGroup` 和构建变量 `APP_GROUP` 只在读不到签名 entitlement 时当兜底提示，**不会覆盖签名里实际拿到的 group**。
+- 如果 Stage 1 显示“签名里没有 application-groups entitlement”，那就是签名工具把 entitlement 丢了，换签名方式，跟漏洞无关。
+
 ---
 
 ## 4. 构建
@@ -111,6 +125,7 @@ Windows 下生成 Base64（PowerShell，避免换行）：
 ```
 
 产物 `wqverify-signed`。导出后会反查 `codesign --entitlements`，确认 App Group 真的在包里；不在就红。
+这里的 `APP_GROUP` 必须与 profile 里授权的 group 一致，因为 `ios.yml` 走的是 Xcode 的 entitlements 文件，不是外部签名工具。运行时仍以签名实际注入的 group 为准。
 
 ### 4.3 本地 Mac + Xcode
 

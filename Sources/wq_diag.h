@@ -21,6 +21,14 @@ NSArray<NSString *> *wq_listdir(NSString *path, int32_t *errp, NSInteger limit);
 /// Reads up to maxLen bytes from a file. Returns nil on failure and writes errno to *errp.
 NSData *wq_readfile(NSString *path, NSInteger maxLen, int32_t *errp);
 
+/// Every App Group string present in this app's own code-signing entitlements.
+/// Empty when the signer dropped the application-groups entitlement.
+NSArray<NSString *> *wq_entitled_app_groups(void);
+
+/// The first entitled App Group that actually resolves to a container.
+/// This is the group the signer injected, not a hardcoded identifier.
+NSString *wq_own_app_group(void);
+
 /// Reads com.apple.containermanager.identifier from a container directory.
 /// Requires a consumed sandbox extension for that path.
 NSString *wq_container_id(NSString *path);
